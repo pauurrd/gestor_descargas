@@ -3,11 +3,9 @@ import requests
 import json
 import re
 
-# --- 1. EXTRACTOR PRINCIPAL (yt-dlp) ---
 def extraer_enlace_real(url_publica):
     print(f"[*] Analizando URL con yt-dlp: {url_publica}")
     
-    # Opciones para intentar extraer lo máximo posible
     ydl_opts = {
         'format': 'best',
         'noplaylist': True,
@@ -17,15 +15,12 @@ def extraer_enlace_real(url_publica):
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
-            # download=False es vital para solo obtener la URL sin bajar nada aquí
             info_dict = ydl.extract_info(url_publica, download=False)
             
-            # Intentamos obtener la URL directa
             enlace_directo = info_dict.get('url', None)
             titulo = info_dict.get('title', 'video_descargado')
             ext = info_dict.get('ext', 'mp4')
             
-            # Si yt-dlp devuelve una lista de formatos (a veces pasa), cogemos el primero
             if not enlace_directo and 'entries' in info_dict:
                 enlace_directo = info_dict['entries'][0].get('url', None)
                 titulo = info_dict['entries'][0].get('title', titulo)
@@ -33,7 +28,6 @@ def extraer_enlace_real(url_publica):
             if not enlace_directo:
                 return None, None
 
-            # Sanitizamos el nombre del archivo
             nombre_final = f"{titulo}.{ext}".replace("/", "_").replace("\\", "_").replace(":", "-")
             
             return enlace_directo, nombre_final
@@ -42,19 +36,14 @@ def extraer_enlace_real(url_publica):
             print(f"[-] Error al extraer con yt-dlp: {e}")
             return None, None
 
-# --- 2. EL ROUTER (Ahora limpio) ---
-def resolver_url(url_usuario):
-    # AQUÍ ES DONDE ANTES TENÍAS LA TRAMPA DE ANIMEFLV
-    # Ahora la hemos quitado.
-    
-    # Si en el futuro escribes un scraper real para una web, lo pones aquí:
+def resolver_url(url_usuario): 
+    # Si en el futuro hacemos un scraper real para otras webs, lo pondremos aquí:
     # if "miwebprivada.com" in url_usuario:
     #     return mi_extractor_privado(url_usuario)
     
     # Por defecto, intentamos que yt-dlp lo resuelva todo
     return extraer_enlace_real(url_usuario)
 
-# --- 3. COMUNICACIÓN CON ARIA2 (Igual que antes) ---
 def enviar_a_aria2(enlace_directo, nombre_archivo):
     print(f"[*] Enviando {nombre_archivo} a aria2...")
     rpc_url = "http://localhost:6800/jsonrpc"
@@ -80,7 +69,6 @@ def enviar_a_aria2(enlace_directo, nombre_archivo):
         print(f"[-] Error conectando con aria2: {e}")
         return None
 
-# --- 4. MONITORIZACIÓN (Igual que antes) ---
 def obtener_estado_aria2():
     payload = {
         "jsonrpc": "2.0",
@@ -117,3 +105,18 @@ def obtener_info_gid(gid):
         if 'result' in datos: return datos['result']
     except: return None
     return None
+
+def pausar_descarga_aria2(gid):
+    try:
+        requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "pause", "method": "aria2.pause", "params": [gid]})
+    except: pass
+
+def reanudar_descarga_aria2(gid):
+    try:
+        requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "unpause", "method": "aria2.unpause", "params": [gid]})
+    except: pass
+
+def cancelar_descarga_aria2(gid):
+    try:
+        requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "remove", "method": "aria2.remove", "params": [gid]})
+    except: pass

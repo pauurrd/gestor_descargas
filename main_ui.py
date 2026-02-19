@@ -1,22 +1,23 @@
 import sys
 import threading
 import gi
+import random
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1') 
 from gi.repository import Gtk, Adw, Gio, GLib, GObject
 
-from extractor import resolver_url, enviar_a_aria2, obtener_estado_aria2, formatear_tamano, obtener_info_gid
+from extractor import (resolver_url, enviar_a_aria2, obtener_estado_aria2, 
+                       formatear_tamano, obtener_info_gid, 
+                       pausar_descarga_aria2, reanudar_descarga_aria2, cancelar_descarga_aria2)
 
 class VentanaPrincipal(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Gestor de Descargas GTK")
         self.set_default_size(1000, 650)
         
-        # Variable para guardar qué estamos filtrando (0=Todas, 1=Descargando, etc.)
         self.filtro_actual_index = 0 
 
-        # --- ESTRUCTURA DE LA VENTANA ---
         caja_main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         header = Adw.HeaderBar()
         caja_main.append(header)
@@ -30,12 +31,10 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.paned_principal.set_start_child(self.paned_superior)
         self.paned_principal.set_position(250)
 
-        # 1. Sidebar (Izquierda)
+
         self.sidebar = Gtk.ListBox()
         self.sidebar.add_css_class("navigation-sidebar")
-        
-        # Conectamos el clic en el sidebar a nuestra función de filtrado
-        self.sidebar.connect("row-selected", self.on_sidebar_selected) # <--- NUEVO
+        self.sidebar.connect("row-selected", self.on_sidebar_selected)
 
         for etiqueta in ["📥 Todas", "⏳ Descargando", "✅ Completadas", "❌ Errores"]:
             row = Gtk.ListBoxRow()
@@ -43,7 +42,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             row.set_child(lbl)
             self.sidebar.append(row)
             
-        # Seleccionamos la primera fila ("Todas") por defecto visualmente
         self.sidebar.select_row(self.sidebar.get_row_at_index(0))
 
         scroll_sidebar = Gtk.ScrolledWindow()
@@ -51,10 +49,9 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         scroll_sidebar.set_size_request(200, -1)
         self.paned_superior.set_start_child(scroll_sidebar)
 
-        # 2. Zona Derecha
+        
         caja_derecha = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         
-        # Inputs
         caja_input = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         caja_input.set_margin_top(10)
         caja_input.set_margin_start(10)
@@ -69,20 +66,13 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         caja_input.append(btn_descargar)
         caja_derecha.append(caja_input)
 
-        # --- SISTEMA DE FILTRADO (LA MAGIA NUEVA) ---
+        
         self.store = Gio.ListStore(item_type=DescargaItem)
-        
-        # 1. Creamos un filtro personalizado
         self.filtro = Gtk.CustomFilter.new(match_func=self.logica_de_filtrado)
-        
-        # 2. Creamos el modelo de filtrado que envuelve a nuestros datos (store)
         self.filter_model = Gtk.FilterListModel(model=self.store, filter=self.filtro)
-        
-        # 3. La selección ahora mira al modelo filtrado, no al store directo
         self.selection_model = Gtk.SingleSelection(model=self.filter_model)
         
         self.tabla = Gtk.ColumnView(model=self.selection_model)
-        
         self.crear_columna("Nombre", "nombre")
         self.crear_columna("Estado", "estado")
         self.crear_columna("Tamaño", "tamano")   
@@ -93,10 +83,35 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         scroll_tabla.set_child(self.tabla)
         scroll_tabla.set_vexpand(True)
         caja_derecha.append(scroll_tabla)
+
+        
+
+
+        caja_acciones = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        caja_acciones.set_margin_bottom(10)
+        caja_acciones.set_margin_start(10)
+        caja_acciones.set_margin_end(10)
+        
+        self.btn_reintentar = Gtk.Button(label="🔄 Reintentar")
+        self.btn_pausar = Gtk.Button(label="⏸ Pausar / Reanudar")
+        self.btn_cancelar = Gtk.Button(label="⏹ Cancelar")
+        
+        self.btn_reintentar.add_css_class("suggested-action") 
+        self.btn_cancelar.add_css_class("destructive-action")
+        
+        self.btn_reintentar.connect("clicked", self.on_btn_reintentar_clicked)
+        self.btn_pausar.connect("clicked", self.on_btn_pausar_clicked)
+        self.btn_cancelar.connect("clicked", self.on_btn_cancelar_clicked)
+        
+        caja_acciones.append(self.btn_reintentar)
+        caja_acciones.append(self.btn_pausar)
+        caja_acciones.append(self.btn_cancelar)
+        caja_derecha.append(caja_acciones)
+
         self.paned_superior.set_end_child(caja_derecha)
         self.paned_superior.set_position(300)
 
-        # 3. Panel Log
+        
         self.log_buffer = Gtk.TextBuffer()
         self.log_view = Gtk.TextView(buffer=self.log_buffer)
         self.log_view.set_editable(False)
@@ -106,40 +121,84 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         notebook.append_page(scroll_log, Gtk.Label(label="Registro"))
         self.paned_principal.set_end_child(notebook)
 
-        self.log("Sistema iniciado.")
+        self.log("Sistema iniciado y listo.")
         GLib.timeout_add(1000, self.monitorizar_descargas)
 
-    # --- LÓGICA DE FILTRADO ---
+    
+
+    def on_btn_reintentar_clicked(self, btn):
+        item = self.selection_model.get_selected_item()
+        
+        if not item: return
+        
+        if "Cancelado" in item.estado or "Error" in item.estado:
+            if not item.url:
+                self.log(f"⚠️ No hay un enlace válido guardado para reintentar {item.nombre}.")
+                return
+                
+            self.log(f"🔄 Reintentando descarga: {item.nombre}")
+            
+            respuesta = enviar_a_aria2(item.url, item.nombre)
+            nuevo_gid = respuesta.get('result', None) if respuesta else None
+            
+            if nuevo_gid:
+                item.gid = nuevo_gid
+                item.estado = "Pendiente..."
+                item.progreso = "0%"
+                item.velocidad = "0 KB/s"
+                item.tamano = "Calculando..."
+                self.filtro.changed(Gtk.FilterChange.DIFFERENT)
+            else:
+                self.log(f"❌ Fallo al intentar reiniciar {item.nombre} en aria2.")
+
+    def on_btn_pausar_clicked(self, btn):
+        item = self.selection_model.get_selected_item()
+        if not item or item.gid.startswith("error_"): return
+
+        if "Pausado" in item.estado:
+            reanudar_descarga_aria2(item.gid)
+            item.estado = "Descargando..."
+            self.log(f"▶️ Reanudando: {item.nombre}")
+        elif "Descargando" in item.estado or "Pendiente" in item.estado:
+            pausar_descarga_aria2(item.gid)
+            item.estado = "⏸ Pausado"
+            item.velocidad = "0 KB/s"
+            self.log(f"⏸ Pausando: {item.nombre}")
+            
+        self.filtro.changed(Gtk.FilterChange.DIFFERENT)
+
+    def on_btn_cancelar_clicked(self, btn):
+        item = self.selection_model.get_selected_item()
+        if not item or item.gid.startswith("error_"): return
+
+        if "Completado" not in item.estado and "Cancelado" not in item.estado:
+            cancelar_descarga_aria2(item.gid)
+            item.estado = "🗑️ Cancelado"
+            item.progreso = "Cancelado"
+            item.velocidad = "-"
+            self.log(f"⏹ Descarga cancelada: {item.nombre}")
+            self.filtro.changed(Gtk.FilterChange.DIFFERENT)
+
+    
+
     def on_sidebar_selected(self, listbox, row):
         if row:
-            # Guardamos qué botón se pulsó (0, 1, 2, 3)
             self.filtro_actual_index = row.get_index()
-            # Avisamos al filtro que algo ha cambiado ("Change.DIFFERENT")
             self.filtro.changed(Gtk.FilterChange.DIFFERENT)
 
     def logica_de_filtrado(self, item, user_data=None):
-        # Esta función se ejecuta para CADA fila de la tabla para decidir si se muestra
-        
-        # Caso 0: Todas
         if self.filtro_actual_index == 0:
             return True
-        
-        # Caso 1: Descargando
         if self.filtro_actual_index == 1:
-            # Mostramos si pone "Descargando" o "Pendiente"
-            return "Descargando" in item.estado or "Pendiente" in item.estado
-        
-        # Caso 2: Completadas
+            return "Descargando" in item.estado or "Pendiente" in item.estado or "Pausado" in item.estado
         if self.filtro_actual_index == 2:
             return "Completado" in item.estado
-            
-        # Caso 3: Errores
         if self.filtro_actual_index == 3:
-            return "Error" in item.estado
-            
+            return "Error" in item.estado or "Cancelado" in item.estado
         return True
 
-    # --- RESTO DE MÉTODOS (IGUALES QUE ANTES) ---
+
+
 
     def log(self, mensaje):
         self.log_buffer.insert(self.log_buffer.get_end_iter(), f"\n[*] {mensaje}")
@@ -166,40 +225,26 @@ class VentanaPrincipal(Adw.ApplicationWindow):
     def tarea_background(self, url):
         try:
             url_real, nombre = resolver_url(url)
-            
-            # Si nombre es None (falló), usamos la URL para que se vea en la tabla
             nombre_a_mostrar = nombre if nombre else url
-            
             GLib.idle_add(self.actualizar_ui_tras_busqueda, url_real, nombre_a_mostrar)
         except Exception as e:
             GLib.idle_add(self.log, f"Error: {e}")
 
     def actualizar_ui_tras_busqueda(self, url_real, nombre):
         if url_real:
-            # --- CASO ÉXITO: ENVIAMOS A ARIA2 ---
             self.log(f"Enviando a aria2: {nombre}")
             respuesta = enviar_a_aria2(url_real, nombre)
             gid = respuesta.get('result', None) if respuesta else None
             
             if gid:
-                nuevo = DescargaItem(gid, nombre, "Pendiente...", "Calculando", "0%", "0 KB/s")
+                nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_real)
                 self.store.append(nuevo)
                 self.filtro.changed(Gtk.FilterChange.DIFFERENT)
         else:
-            # --- CASO ERROR: NO SE PUDO RESOLVER ---
             self.log(f"⚠️ No se pudo obtener el video de: {nombre}")
-            
-            # Generamos un ID falso aleatorio para que la tabla no se queje
-            import random
             fake_gid = f"error_{random.randint(1000, 9999)}"
-            
-            # Creamos la fila visualmente marcándola como Error
-            # Fíjate que en estado ponemos "❌ Error" para que el filtro lo detecte
-            nuevo_error = DescargaItem(fake_gid, nombre, "❌ Error (URL inválida)", "-", "Fallido", "-")
-            
+            nuevo_error = DescargaItem(fake_gid, nombre, "❌ Error (URL inválida)", "-", "Fallido", "-", "")
             self.store.append(nuevo_error)
-            
-            # Avisamos al filtro para que actualice la vista
             self.filtro.changed(Gtk.FilterChange.DIFFERENT)
             
         return False
@@ -208,21 +253,15 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         try:
             lista_activos = obtener_estado_aria2()
             n_items = self.store.get_n_items()
-            
-            # --- NOTA IMPORTANTE PARA FILTROS ---
-            # El bucle recorre self.store (TODOS los datos), no la tabla visible.
-            # Así seguimos actualizando aunque la fila esté oculta por el filtro.
-            
-            hubo_cambios_de_estado = False # Flag para actualizar filtro
+            hubo_cambios_de_estado = False 
 
             for i in range(n_items):
                 item_ui = self.store.get_item(i)
                 
-                if "Completado" in item_ui.estado or "Error" in item_ui.estado:
+                if "Completado" in item_ui.estado or "Error" in item_ui.estado or "Cancelado" in item_ui.estado or "Pausado" in item_ui.estado:
                     continue
 
                 datos_aria = next((x for x in lista_activos if x['gid'] == item_ui.gid), None)
-                
                 antiguo_estado = item_ui.estado
 
                 if datos_aria:
@@ -263,8 +302,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                         elif estado_real == 'removed':
                             item_ui.estado = "🗑️ Eliminado"
                 
-                # Si el estado cambió (ej: de Descargando -> Completado), 
-                # avisamos para que el filtro oculte la fila si es necesario
                 if item_ui.estado != antiguo_estado:
                     hubo_cambios_de_estado = True
 
@@ -272,11 +309,11 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                 self.filtro.changed(Gtk.FilterChange.DIFFERENT)
 
         except Exception as e:
-            print(f"ERROR BUCLE: {e}")
+            pass
 
         return True
 
-# --- CLASE DE DATOS ---
+
 class DescargaItem(GObject.Object):
     gid = GObject.Property(type=str)
     nombre = GObject.Property(type=str)
@@ -284,8 +321,9 @@ class DescargaItem(GObject.Object):
     tamano = GObject.Property(type=str)
     progreso = GObject.Property(type=str)
     velocidad = GObject.Property(type=str)
+    url = GObject.Property(type=str)
 
-    def __init__(self, gid, nombre, estado, tamano, progreso, velocidad):
+    def __init__(self, gid, nombre, estado, tamano, progreso, velocidad, url):
         super().__init__()
         self.gid = gid
         self.nombre = nombre
@@ -293,6 +331,7 @@ class DescargaItem(GObject.Object):
         self.tamano = tamano
         self.progreso = progreso
         self.velocidad = velocidad
+        self.url = url
 
 class MiGestorApp(Adw.Application):
     def __init__(self):
