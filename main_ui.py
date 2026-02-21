@@ -31,7 +31,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.paned_principal.set_start_child(self.paned_superior)
         self.paned_principal.set_position(250)
 
-
         self.sidebar = Gtk.ListBox()
         self.sidebar.add_css_class("navigation-sidebar")
         self.sidebar.connect("row-selected", self.on_sidebar_selected)
@@ -41,15 +40,12 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             lbl = Gtk.Label(label=etiqueta, xalign=0, margin_start=10, margin_top=10, margin_bottom=10)
             row.set_child(lbl)
             self.sidebar.append(row)
-            
-        self.sidebar.select_row(self.sidebar.get_row_at_index(0))
 
         scroll_sidebar = Gtk.ScrolledWindow()
         scroll_sidebar.set_child(self.sidebar)
         scroll_sidebar.set_size_request(200, -1)
         self.paned_superior.set_start_child(scroll_sidebar)
 
-        
         caja_derecha = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         
         caja_input = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -66,7 +62,24 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         caja_input.append(btn_descargar)
         caja_derecha.append(caja_input)
 
+        expander = Gtk.Expander(label="⚙️ Opciones Avanzadas (Proxy)")
+        expander.set_margin_start(10)
+        expander.set_margin_end(10)
         
+        caja_avanzada = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        caja_avanzada.set_margin_top(10)
+        caja_avanzada.set_margin_bottom(10)
+        
+        lbl_proxy = Gtk.Label(label="Servidor Proxy:")
+        self.entrada_proxy = Gtk.Entry()
+        self.entrada_proxy.set_hexpand(True)
+        self.entrada_proxy.set_placeholder_text("Ej: http://127.0.0.1:8080 (Dejar en blanco para desactivar)")
+        
+        caja_avanzada.append(lbl_proxy)
+        caja_avanzada.append(self.entrada_proxy)
+        expander.set_child(caja_avanzada)
+        caja_derecha.append(expander)
+
         self.store = Gio.ListStore(item_type=DescargaItem)
         self.filtro = Gtk.CustomFilter.new(match_func=self.logica_de_filtrado)
         self.filter_model = Gtk.FilterListModel(model=self.store, filter=self.filtro)
@@ -84,9 +97,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         scroll_tabla.set_vexpand(True)
         caja_derecha.append(scroll_tabla)
 
-        
-
-
         caja_acciones = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         caja_acciones.set_margin_bottom(10)
         caja_acciones.set_margin_start(10)
@@ -96,7 +106,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.btn_pausar = Gtk.Button(label="⏸ Pausar / Reanudar")
         self.btn_cancelar = Gtk.Button(label="⏹ Cancelar")
         
-        self.btn_reintentar.add_css_class("suggested-action") 
+        self.btn_reintentar.add_css_class("suggested-action")
         self.btn_cancelar.add_css_class("destructive-action")
         
         self.btn_reintentar.connect("clicked", self.on_btn_reintentar_clicked)
@@ -111,7 +121,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.paned_superior.set_end_child(caja_derecha)
         self.paned_superior.set_position(300)
 
-        
         self.log_buffer = Gtk.TextBuffer()
         self.log_view = Gtk.TextView(buffer=self.log_buffer)
         self.log_view.set_editable(False)
@@ -122,23 +131,22 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.paned_principal.set_end_child(notebook)
 
         self.log("Sistema iniciado y listo.")
+        self.sidebar.select_row(self.sidebar.get_row_at_index(0))
         GLib.timeout_add(1000, self.monitorizar_descargas)
 
-    
 
     def on_btn_reintentar_clicked(self, btn):
         item = self.selection_model.get_selected_item()
-        
         if not item: return
         
-        if "Cancelado" in item.estado or "Error" in item.estado:
-            if not item.url:
+        if "Cancelado" in item.estado or "Error" in item.estado or "Rechazado" in item.estado:
+            if not item.url: 
                 self.log(f"⚠️ No hay un enlace válido guardado para reintentar {item.nombre}.")
                 return
                 
             self.log(f"🔄 Reintentando descarga: {item.nombre}")
             
-            respuesta = enviar_a_aria2(item.url, item.nombre)
+            respuesta = enviar_a_aria2(item.url, item.nombre, item.proxy)
             nuevo_gid = respuesta.get('result', None) if respuesta else None
             
             if nuevo_gid:
@@ -179,8 +187,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             self.log(f"⏹ Descarga cancelada: {item.nombre}")
             self.filtro.changed(Gtk.FilterChange.DIFFERENT)
 
-    
-
     def on_sidebar_selected(self, listbox, row):
         if row:
             self.filtro_actual_index = row.get_index()
@@ -194,11 +200,8 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         if self.filtro_actual_index == 2:
             return "Completado" in item.estado
         if self.filtro_actual_index == 3:
-            return "Error" in item.estado or "Cancelado" in item.estado
+            return "Error" in item.estado or "Cancelado" in item.estado or "Rechazado" in item.estado
         return True
-
-
-
 
     def log(self, mensaje):
         self.log_buffer.insert(self.log_buffer.get_end_iter(), f"\n[*] {mensaje}")
@@ -218,32 +221,42 @@ class VentanaPrincipal(Adw.ApplicationWindow):
 
     def on_btn_descargar_clicked(self, btn):
         url = self.entrada_url.get_text()
+        proxy = self.entrada_proxy.get_text().strip()
+        
         if url: 
             self.entrada_url.set_text("")
-            threading.Thread(target=self.tarea_background, args=(url,)).start()
+            threading.Thread(target=self.tarea_background, args=(url, proxy)).start()
 
-    def tarea_background(self, url):
+    def tarea_background(self, url, proxy):
         try:
-            url_real, nombre = resolver_url(url)
+            url_real, nombre = resolver_url(url, proxy)
             nombre_a_mostrar = nombre if nombre else url
-            GLib.idle_add(self.actualizar_ui_tras_busqueda, url_real, nombre_a_mostrar)
+            GLib.idle_add(self.actualizar_ui_tras_busqueda, url_real, nombre_a_mostrar, proxy)
         except Exception as e:
             GLib.idle_add(self.log, f"Error: {e}")
 
-    def actualizar_ui_tras_busqueda(self, url_real, nombre):
+    def actualizar_ui_tras_busqueda(self, url_real, nombre, proxy):
         if url_real:
             self.log(f"Enviando a aria2: {nombre}")
-            respuesta = enviar_a_aria2(url_real, nombre)
+            respuesta = enviar_a_aria2(url_real, nombre, proxy)
             gid = respuesta.get('result', None) if respuesta else None
             
             if gid:
-                nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_real)
+                nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_real, proxy)
                 self.store.append(nuevo)
+                self.filtro.changed(Gtk.FilterChange.DIFFERENT)
+            else:
+                self.log(f"❌ Aria2 rechazó el enlace (¿URL inválida?): {nombre}")
+                import random
+                fake_gid = f"error_aria2_{random.randint(1000, 9999)}"
+                nuevo_error = DescargaItem(fake_gid, nombre, "❌ Rechazado por Aria2", "-", "Fallido", "-", url_real, proxy)
+                self.store.append(nuevo_error)
                 self.filtro.changed(Gtk.FilterChange.DIFFERENT)
         else:
             self.log(f"⚠️ No se pudo obtener el video de: {nombre}")
+            import random
             fake_gid = f"error_{random.randint(1000, 9999)}"
-            nuevo_error = DescargaItem(fake_gid, nombre, "❌ Error (URL inválida)", "-", "Fallido", "-", "")
+            nuevo_error = DescargaItem(fake_gid, nombre, "❌ Error (URL inválida)", "-", "Fallido", "-", "", proxy)
             self.store.append(nuevo_error)
             self.filtro.changed(Gtk.FilterChange.DIFFERENT)
             
@@ -258,7 +271,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             for i in range(n_items):
                 item_ui = self.store.get_item(i)
                 
-                if "Completado" in item_ui.estado or "Error" in item_ui.estado or "Cancelado" in item_ui.estado or "Pausado" in item_ui.estado:
+                if "Completado" in item_ui.estado or "Error" in item_ui.estado or "Cancelado" in item_ui.estado or "Pausado" in item_ui.estado or "Rechazado" in item_ui.estado:
                     continue
 
                 datos_aria = next((x for x in lista_activos if x['gid'] == item_ui.gid), None)
@@ -313,7 +326,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
 
         return True
 
-
 class DescargaItem(GObject.Object):
     gid = GObject.Property(type=str)
     nombre = GObject.Property(type=str)
@@ -321,9 +333,10 @@ class DescargaItem(GObject.Object):
     tamano = GObject.Property(type=str)
     progreso = GObject.Property(type=str)
     velocidad = GObject.Property(type=str)
-    url = GObject.Property(type=str)
+    url = GObject.Property(type=str) 
+    proxy = GObject.Property(type=str)
 
-    def __init__(self, gid, nombre, estado, tamano, progreso, velocidad, url):
+    def __init__(self, gid, nombre, estado, tamano, progreso, velocidad, url, proxy):
         super().__init__()
         self.gid = gid
         self.nombre = nombre
@@ -331,7 +344,8 @@ class DescargaItem(GObject.Object):
         self.tamano = tamano
         self.progreso = progreso
         self.velocidad = velocidad
-        self.url = url
+        self.url = url 
+        self.proxy = proxy
 
 class MiGestorApp(Adw.Application):
     def __init__(self):

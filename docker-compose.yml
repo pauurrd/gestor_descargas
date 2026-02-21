@@ -8,7 +8,19 @@ services:
       - "9050:9050"
     restart: unless-stopped
 
-  # 2. El Motor de Descargas (Aria2)
+  # 2. El traductor (Privoxy)
+  # Recibe peticiones de Aria2 y las mete en Tor respetando los nombres .onion
+  privoxy:
+    image: alpine:edge
+    container_name: poc-privoxy
+    command: sh -c "apk add --no-cache privoxy && echo 'listen-address 0.0.0.0:8118' > /etc/privoxy/config && echo 'forward-socks5a / poc-tor-proxy:9050 .' >> /etc/privoxy/config && privoxy --no-daemon /etc/privoxy/config"
+    ports:
+      - "8118:8118"
+    depends_on:
+      - tor-proxy
+    restart: unless-stopped
+
+  # 3. El Motor de Descargas (Aria2)
   aria2-rpc:
     image: alpine:edge
     container_name: poc-aria2-backend
@@ -20,11 +32,18 @@ services:
       --rpc-listen-port=6800 
       --dir=/downloads 
       --max-connection-per-server=4 
-      --min-split-size=1M"
+      --min-split-size=1M 
+      --listen-port=6881 
+      --dht-listen-port=6881 
+      --enable-dht=true 
+      --bt-enable-lpd=true"
     ports:
       - "6800:6800"
+      - "6881:6881"
+      - "6881:6881/udp"
     volumes:
       - ./descargas_prueba:/downloads
+      - ./aria2_config:/config
     depends_on:
-      - tor-proxy
+      - privoxy
     restart: unless-stopped

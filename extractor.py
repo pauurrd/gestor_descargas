@@ -2,16 +2,22 @@ import yt_dlp
 import requests
 import json
 import re
+import urllib.parse
+import os
 
-def extraer_enlace_real(url_publica):
+# Extractor principal (yt-dlp) 
+def extraer_enlace_real(url_publica, proxy=None):
     print(f"[*] Analizando URL con yt-dlp: {url_publica}")
     
     ydl_opts = {
         'format': 'best',
         'noplaylist': True,
         'quiet': True,
-        # 'ignoreerrors': True, # Descomentar si quieres ignorar errores leves
     }
+    # Inyectar proxy manual en yt-dlp 
+    if proxy:
+        ydl_opts['proxy'] = proxy
+        print(f"[*] 🛡️ yt-dlp usando proxy manual: {proxy}")
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
@@ -29,24 +35,77 @@ def extraer_enlace_real(url_publica):
                 return None, None
 
             nombre_final = f"{titulo}.{ext}".replace("/", "_").replace("\\", "_").replace(":", "-")
-            
             return enlace_directo, nombre_final
             
         except Exception as e:
             print(f"[-] Error al extraer con yt-dlp: {e}")
             return None, None
 
-def resolver_url(url_usuario): 
-    # Si en el futuro hacemos un scraper real para otras webs, lo pondremos aquí:
-    # if "miwebprivada.com" in url_usuario:
-    #     return mi_extractor_privado(url_usuario)
-    
-    # Por defecto, intentamos que yt-dlp lo resuelva todo
-    return extraer_enlace_real(url_usuario)
+def es_enlace_directo(url):
+    if url.startswith("magnet:?"):
+        return True, "Descarga_Torrent"
 
-def enviar_a_aria2(enlace_directo, nombre_archivo):
+    if ".onion" in url:
+        ruta = urllib.parse.urlparse(url).path
+        nombre_archivo = os.path.basename(ruta)
+        if not nombre_archivo: nombre_archivo = "archivo_tor_desconocido"
+        return True, nombre_archivo
+
+    ruta = urllib.parse.urlparse(url).path
+    nombre_archivo = os.path.basename(ruta)
+    _, ext = os.path.splitext(nombre_archivo)
+    
+    extensiones_comunes = [
+        '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.txt', '.csv',
+        '.zip', '.rar', '.7z', '.tar', '.gz', '.xz', 
+        '.jpg', '.png', '.gif', '.jpeg', '.webp',
+        '.exe', '.iso', '.deb', '.apk', '.msi',
+        '.mp4', '.mkv', '.avi', '.mov',
+        '.mp3', '.ogg', '.wav', '.flac'
+    ]
+
+    if ext.lower() in extensiones_comunes:
+        if not nombre_archivo:
+            nombre_archivo = "archivo_descargado" + ext
+        return True, nombre_archivo
+        
+    return False, None
+
+# Router
+def resolver_url(url_usuario, proxy=None):
+    url_usuario = url_usuario.strip()
+    
+    if not url_usuario.startswith(('http://', 'https://', 'ftp://', 'magnet:')):
+        url_usuario = 'https://' + url_usuario
+        print(f"[*] Auto-corrigiendo URL sin protocolo: {url_usuario}")
+    
+    es_directo, nombre_archivo = es_enlace_directo(url_usuario)
+    if es_directo:
+        print(f"[*] Enlace directo o Torrent detectado: {nombre_archivo}")
+        return url_usuario, nombre_archivo
+        
+    print("[*] Enlace genérico detectado. Delegando a yt-dlp...")
+    return extraer_enlace_real(url_usuario, proxy)
+
+# Comunicación con aria2
+def enviar_a_aria2(enlace_directo, nombre_archivo, proxy=None):
     print(f"[*] Enviando {nombre_archivo} a aria2...")
     rpc_url = "http://localhost:6800/jsonrpc"
+    
+    opciones = {
+        "out": nombre_archivo,
+        "split": "4",
+        "max-connection-per-server": "4"
+    }
+
+    # Lógica de proxy (privoxy)
+    if proxy:
+        proxy_aria = proxy.replace("127.0.0.1:8118", "poc-privoxy:8118").replace("localhost", "poc-privoxy")
+        print(f"[*] 🛡️ Usando proxy manual para Aria2: {proxy_aria}")
+        opciones["all-proxy"] = proxy_aria
+    elif ".onion" in enlace_directo:
+        print("[*] 🧅 Enlace .onion detectado. Enrutando a través de Privoxy -> Tor...")
+        opciones["all-proxy"] = "http://poc-privoxy:8118"
     
     payload = {
         "jsonrpc": "2.0",
@@ -54,17 +113,16 @@ def enviar_a_aria2(enlace_directo, nombre_archivo):
         "method": "aria2.addUri",
         "params": [
             [enlace_directo],
-            {
-                "out": nombre_archivo,
-                "split": "4",
-                "max-connection-per-server": "4"
-            }
+            opciones
         ]
     }
     
     try:
         respuesta = requests.post(rpc_url, json=payload)
-        return respuesta.json()
+        datos = respuesta.json()
+        if "error" in datos:
+            print(f"[-] ARIA2 RECHAZÓ EL ENLACE: {datos['error'].get('message', 'Desconocido')}")
+        return datos
     except Exception as e:
         print(f"[-] Error conectando con aria2: {e}")
         return None
@@ -107,16 +165,13 @@ def obtener_info_gid(gid):
     return None
 
 def pausar_descarga_aria2(gid):
-    try:
-        requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "pause", "method": "aria2.pause", "params": [gid]})
+    try: requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "pause", "method": "aria2.pause", "params": [gid]})
     except: pass
 
 def reanudar_descarga_aria2(gid):
-    try:
-        requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "unpause", "method": "aria2.unpause", "params": [gid]})
+    try: requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "unpause", "method": "aria2.unpause", "params": [gid]})
     except: pass
 
 def cancelar_descarga_aria2(gid):
-    try:
-        requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "remove", "method": "aria2.remove", "params": [gid]})
+    try: requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "remove", "method": "aria2.remove", "params": [gid]})
     except: pass
