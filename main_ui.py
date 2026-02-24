@@ -80,6 +80,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         expander.set_child(caja_avanzada)
         caja_derecha.append(expander)
 
+
         self.store = Gio.ListStore(item_type=DescargaItem)
         self.filtro = Gtk.CustomFilter.new(match_func=self.logica_de_filtrado)
         self.filter_model = Gtk.FilterListModel(model=self.store, filter=self.filtro)
@@ -105,6 +106,9 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.btn_reintentar = Gtk.Button(label="🔄 Reintentar")
         self.btn_pausar = Gtk.Button(label="⏸ Pausar / Reanudar")
         self.btn_cancelar = Gtk.Button(label="⏹ Cancelar")
+
+        self.btn_abrir_carpeta = Gtk.Button(label="📁 Abrir Carpeta")
+        self.btn_abrir_carpeta.connect("clicked", self.on_btn_abrir_carpeta_clicked)
         
         self.btn_reintentar.add_css_class("suggested-action")
         self.btn_cancelar.add_css_class("destructive-action")
@@ -116,6 +120,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         caja_acciones.append(self.btn_reintentar)
         caja_acciones.append(self.btn_pausar)
         caja_acciones.append(self.btn_cancelar)
+        caja_acciones.append(self.btn_abrir_carpeta)
         caja_derecha.append(caja_acciones)
 
         self.paned_superior.set_end_child(caja_derecha)
@@ -145,7 +150,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                 return
                 
             self.log(f"🔄 Reintentando descarga: {item.nombre}")
-            
+
             respuesta = enviar_a_aria2(item.url, item.nombre, item.proxy)
             nuevo_gid = respuesta.get('result', None) if respuesta else None
             
@@ -285,14 +290,37 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                     if total > 0:
                         porcentaje = (completado / total) * 100
                         item_ui.progreso = f"{porcentaje:.1f}%"
-                    
-                    item_ui.tamano = formatear_tamano(total)
+                        item_ui.tamano = formatear_tamano(total)
+                    else:
+                        if item_ui.url.startswith("magnet:?"):
+                            item_ui.progreso = "Calculando..."
+                            item_ui.tamano = "Metadatos"
+
                     item_ui.velocidad = f"{formatear_tamano(velocidad)}/s"
-                    item_ui.estado = "Descargando..."
+                    
+                    if velocidad == 0 and completado == 0:
+                        if item_ui.url.startswith("magnet:?"):
+                            item_ui.estado = "Buscando pares (DHT)..."
+                        else:
+                            item_ui.estado = "Conectando..."
+                    else:
+                        item_ui.estado = "Descargando..."
                 
                 else:
                     info_final = obtener_info_gid(item_ui.gid)
                     if info_final:
+                        if 'followedBy' in info_final and len(info_final['followedBy']) > 0:
+                            nuevo_gid = info_final['followedBy'][0]
+                            self.log(f"🔗 Magnet resuelto. Transfiriendo al nuevo GID: {nuevo_gid}")
+                            item_ui.gid = nuevo_gid
+                            
+                            if 'bittorrent' in info_final and 'info' in info_final['bittorrent']:
+                                nombre_real = info_final['bittorrent']['info'].get('name', item_ui.nombre)
+                                item_ui.nombre = nombre_real
+                                
+                            hubo_cambios_de_estado = True
+                            continue 
+
                         estado_real = info_final.get('status', 'unknown')
                         error_code = info_final.get('errorCode', '0')
                         
@@ -325,6 +353,21 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             pass
 
         return True
+
+    def on_btn_abrir_carpeta_clicked(self, btn):
+        import subprocess
+        import os
+        
+        ruta_descargas = os.path.abspath("./descargas_prueba") 
+        
+        if not os.path.exists(ruta_descargas):
+            os.makedirs(ruta_descargas)
+            
+        try:
+            subprocess.Popen(["xdg-open", ruta_descargas])
+            self.log("📁 Abriendo carpeta de descargas...")
+        except Exception as e:
+            self.log(f"⚠️ Error al abrir la carpeta: {e}")
 
 class DescargaItem(GObject.Object):
     gid = GObject.Property(type=str)

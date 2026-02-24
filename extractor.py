@@ -5,16 +5,15 @@ import re
 import urllib.parse
 import os
 
-# Extractor principal (yt-dlp) 
 def extraer_enlace_real(url_publica, proxy=None):
-    print(f"[*] Analizando URL con yt-dlp: {url_publica}")
+    print(f"[*] Analizando UfRL con yt-dlp: {url_publica}")
     
     ydl_opts = {
         'format': 'best',
         'noplaylist': True,
         'quiet': True,
     }
-    # Inyectar proxy manual en yt-dlp 
+    
     if proxy:
         ydl_opts['proxy'] = proxy
         print(f"[*] 🛡️ yt-dlp usando proxy manual: {proxy}")
@@ -61,7 +60,7 @@ def es_enlace_directo(url):
         '.jpg', '.png', '.gif', '.jpeg', '.webp',
         '.exe', '.iso', '.deb', '.apk', '.msi',
         '.mp4', '.mkv', '.avi', '.mov',
-        '.mp3', '.ogg', '.wav', '.flac'
+        '.mp3', '.ogg', '.wav', '.flac', '.torrent'
     ]
 
     if ext.lower() in extensiones_comunes:
@@ -71,13 +70,16 @@ def es_enlace_directo(url):
         
     return False, None
 
-# Router
 def resolver_url(url_usuario, proxy=None):
     url_usuario = url_usuario.strip()
     
     if not url_usuario.startswith(('http://', 'https://', 'ftp://', 'magnet:')):
-        url_usuario = 'https://' + url_usuario
-        print(f"[*] Auto-corrigiendo URL sin protocolo: {url_usuario}")
+        if ".onion" in url_usuario:
+            url_usuario = 'http://' + url_usuario
+            print(f"[*] Auto-corrigiendo URL Onion: {url_usuario}")
+        else:
+            url_usuario = 'https://' + url_usuario
+            print(f"[*] Auto-corrigiendo URL genérica: {url_usuario}")
     
     es_directo, nombre_archivo = es_enlace_directo(url_usuario)
     if es_directo:
@@ -87,18 +89,18 @@ def resolver_url(url_usuario, proxy=None):
     print("[*] Enlace genérico detectado. Delegando a yt-dlp...")
     return extraer_enlace_real(url_usuario, proxy)
 
-# Comunicación con aria2
 def enviar_a_aria2(enlace_directo, nombre_archivo, proxy=None):
     print(f"[*] Enviando {nombre_archivo} a aria2...")
     rpc_url = "http://localhost:6800/jsonrpc"
     
     opciones = {
-        "out": nombre_archivo,
         "split": "4",
         "max-connection-per-server": "4"
     }
 
-    # Lógica de proxy (privoxy)
+    if not enlace_directo.startswith("magnet:?") and ".onion" not in enlace_directo:
+        opciones["out"] = nombre_archivo
+
     if proxy:
         proxy_aria = proxy.replace("127.0.0.1:8118", "poc-privoxy:8118").replace("localhost", "poc-privoxy")
         print(f"[*] 🛡️ Usando proxy manual para Aria2: {proxy_aria}")
