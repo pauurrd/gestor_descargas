@@ -1,7 +1,6 @@
 import sys
 import threading
 import gi
-import random
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1') 
@@ -13,8 +12,8 @@ from extractor import (resolver_url, enviar_a_aria2, obtener_estado_aria2,
 
 class VentanaPrincipal(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="Gestor de Descargas GTK")
-        self.set_default_size(1000, 650)
+        super().__init__(application=app, title="Gestor de Descargas Corporativo")
+        self.set_default_size(1200, 800)
         
         self.filtro_actual_index = 0 
 
@@ -29,7 +28,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
 
         self.paned_superior = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.paned_principal.set_start_child(self.paned_superior)
-        self.paned_principal.set_position(250)
+        self.paned_principal.set_position(500)
 
         self.sidebar = Gtk.ListBox()
         self.sidebar.add_css_class("navigation-sidebar")
@@ -52,34 +51,46 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         caja_input.set_margin_top(10)
         caja_input.set_margin_start(10)
         caja_input.set_margin_end(10)
+        
         self.entrada_url = Gtk.Entry()
         self.entrada_url.set_hexpand(True)
-        self.entrada_url.set_placeholder_text("Pega aquí el enlace...")
+        self.entrada_url.set_placeholder_text("Pega aquí el enlace del documento a descargar y pulsa Enter...")
+        self.entrada_url.connect("activate", self.on_btn_descargar_clicked)
+        
         btn_descargar = Gtk.Button(label="Descargar")
         btn_descargar.add_css_class("suggested-action")
         btn_descargar.connect("clicked", self.on_btn_descargar_clicked)
+        
         caja_input.append(self.entrada_url)
         caja_input.append(btn_descargar)
         caja_derecha.append(caja_input)
 
-        expander = Gtk.Expander(label="⚙️ Opciones Avanzadas (Proxy)")
+        caja_proxy = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        caja_proxy.set_margin_start(10)
+        caja_proxy.set_margin_end(10)
+        
+        lbl_proxy = Gtk.Label(label="🌐 Servidor Proxy:")
+        self.entrada_proxy = Gtk.Entry()
+        self.entrada_proxy.set_hexpand(True)
+        self.entrada_proxy.set_placeholder_text("Inserta el proxy de la empresa. Ej: http://14.56.118.34:3128") 
+        
+        caja_proxy.append(lbl_proxy)
+        caja_proxy.append(self.entrada_proxy)
+        caja_derecha.append(caja_proxy)
+        
+        expander = Gtk.Expander(label="⚙️ Opciones Avanzadas")
         expander.set_margin_start(10)
         expander.set_margin_end(10)
         
-        caja_avanzada = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        caja_avanzada.set_margin_top(10)
-        caja_avanzada.set_margin_bottom(10)
+        caja_avanzada = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        caja_avanzada.set_margin_top(5)
         
-        lbl_proxy = Gtk.Label(label="Servidor Proxy:")
-        self.entrada_proxy = Gtk.Entry()
-        self.entrada_proxy.set_hexpand(True)
-        self.entrada_proxy.set_placeholder_text("Ej: http://127.0.0.1:8080 (Dejar en blanco para desactivar)")
+        self.check_directa = Gtk.CheckButton(label="⚠️ Forzar Descarga Directa (Ignorar Proxy)")
+        self.check_directa.connect("toggled", self.on_check_directa_toggled)
+        caja_avanzada.append(self.check_directa)
         
-        caja_avanzada.append(lbl_proxy)
-        caja_avanzada.append(self.entrada_proxy)
         expander.set_child(caja_avanzada)
         caja_derecha.append(expander)
-
 
         self.store = Gio.ListStore(item_type=DescargaItem)
         self.filtro = Gtk.CustomFilter.new(match_func=self.logica_de_filtrado)
@@ -106,7 +117,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.btn_reintentar = Gtk.Button(label="🔄 Reintentar")
         self.btn_pausar = Gtk.Button(label="⏸ Pausar / Reanudar")
         self.btn_cancelar = Gtk.Button(label="⏹ Cancelar")
-
         self.btn_abrir_carpeta = Gtk.Button(label="📁 Abrir Carpeta")
         self.btn_abrir_carpeta.connect("clicked", self.on_btn_abrir_carpeta_clicked)
         
@@ -132,13 +142,39 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         scroll_log = Gtk.ScrolledWindow()
         scroll_log.set_child(self.log_view)
         notebook = Gtk.Notebook()
-        notebook.append_page(scroll_log, Gtk.Label(label="Registro"))
+        notebook.append_page(scroll_log, Gtk.Label(label="Registro de Actividad"))
         self.paned_principal.set_end_child(notebook)
 
-        self.log("Sistema iniciado y listo.")
+        self.log("Sistema iniciado y listo para uso corporativo.")
         self.sidebar.select_row(self.sidebar.get_row_at_index(0))
         GLib.timeout_add(1000, self.monitorizar_descargas)
 
+    def on_check_directa_toggled(self, checkbutton):
+        self.entrada_proxy.set_sensitive(not checkbutton.get_active())
+
+    def on_btn_descargar_clicked(self, widget=None):
+        url = self.entrada_url.get_text().strip()
+        
+        if not url:
+            return
+
+        if not url.startswith(('http://', 'https://', 'ftp://')):
+            self.log(f"⚠️ ERROR: El enlace '{url}' es inválido. Debe empezar obligatoriamente por http://, https:// o ftp://")
+            return
+
+        if self.check_directa.get_active():
+            proxy_a_usar = None
+        else:
+            proxy_a_usar = self.entrada_proxy.get_text().strip()
+            if not proxy_a_usar:
+                self.log("⚠️ ERROR: El proxy está vacío. Escribe un proxy corporativo o marca la casilla 'Forzar Descarga Directa'.")
+                return
+            if not proxy_a_usar.startswith(('http://', 'https://')):
+                self.log(f"⚠️ ERROR: El proxy '{proxy_a_usar}' es inválido. Debe empezar obligatoriamente por http://, https://, socks5://...")
+                return
+        
+        self.entrada_url.set_text("")
+        threading.Thread(target=self.tarea_background, args=(url, proxy_a_usar)).start()
 
     def on_btn_reintentar_clicked(self, btn):
         item = self.selection_model.get_selected_item()
@@ -150,7 +186,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                 return
                 
             self.log(f"🔄 Reintentando descarga: {item.nombre}")
-
             respuesta = enviar_a_aria2(item.url, item.nombre, item.proxy)
             nuevo_gid = respuesta.get('result', None) if respuesta else None
             
@@ -224,14 +259,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         columna = Gtk.ColumnViewColumn(title=titulo, factory=factory)
         self.tabla.append_column(columna)
 
-    def on_btn_descargar_clicked(self, btn):
-        url = self.entrada_url.get_text()
-        proxy = self.entrada_proxy.get_text().strip()
-        
-        if url: 
-            self.entrada_url.set_text("")
-            threading.Thread(target=self.tarea_background, args=(url, proxy)).start()
-
     def tarea_background(self, url, proxy):
         try:
             url_real, nombre = resolver_url(url, proxy)
@@ -251,14 +278,14 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                 self.store.append(nuevo)
                 self.filtro.changed(Gtk.FilterChange.DIFFERENT)
             else:
-                self.log(f"❌ Aria2 rechazó el enlace (¿URL inválida?): {nombre}")
+                self.log(f"❌ Aria2 rechazó el enlace: {nombre}")
                 import random
                 fake_gid = f"error_aria2_{random.randint(1000, 9999)}"
-                nuevo_error = DescargaItem(fake_gid, nombre, "❌ Rechazado por Aria2", "-", "Fallido", "-", url_real, proxy)
+                nuevo_error = DescargaItem(fake_gid, nombre, "❌ Rechazado", "-", "Fallido", "-", url_real, proxy)
                 self.store.append(nuevo_error)
                 self.filtro.changed(Gtk.FilterChange.DIFFERENT)
         else:
-            self.log(f"⚠️ No se pudo obtener el video de: {nombre}")
+            self.log(f"⚠️ No se pudo obtener enlace válido de: {nombre}")
             import random
             fake_gid = f"error_{random.randint(1000, 9999)}"
             nuevo_error = DescargaItem(fake_gid, nombre, "❌ Error (URL inválida)", "-", "Fallido", "-", "", proxy)
@@ -276,7 +303,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             for i in range(n_items):
                 item_ui = self.store.get_item(i)
                 
-                if "Completado" in item_ui.estado or "Error" in item_ui.estado or "Cancelado" in item_ui.estado or "Pausado" in item_ui.estado or "Rechazado" in item_ui.estado:
+                if "Completado" in item_ui.estado or "Error" in item_ui.estado or "Cancelado" in item_ui.estado or "Rechazado" in item_ui.estado:
                     continue
 
                 datos_aria = next((x for x in lista_activos if x['gid'] == item_ui.gid), None)
@@ -291,42 +318,23 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                         porcentaje = (completado / total) * 100
                         item_ui.progreso = f"{porcentaje:.1f}%"
                         item_ui.tamano = formatear_tamano(total)
-                    else:
-                        if item_ui.url.startswith("magnet:?"):
-                            item_ui.progreso = "Calculando..."
-                            item_ui.tamano = "Metadatos"
 
                     item_ui.velocidad = f"{formatear_tamano(velocidad)}/s"
                     
                     if velocidad == 0 and completado == 0:
-                        if item_ui.url.startswith("magnet:?"):
-                            item_ui.estado = "Buscando pares (DHT)..."
-                        else:
-                            item_ui.estado = "Conectando..."
+                        item_ui.estado = "Conectando..."
                     else:
                         item_ui.estado = "Descargando..."
                 
                 else:
                     info_final = obtener_info_gid(item_ui.gid)
                     if info_final:
-                        if 'followedBy' in info_final and len(info_final['followedBy']) > 0:
-                            nuevo_gid = info_final['followedBy'][0]
-                            self.log(f"🔗 Magnet resuelto. Transfiriendo al nuevo GID: {nuevo_gid}")
-                            item_ui.gid = nuevo_gid
-                            
-                            if 'bittorrent' in info_final and 'info' in info_final['bittorrent']:
-                                nombre_real = info_final['bittorrent']['info'].get('name', item_ui.nombre)
-                                item_ui.nombre = nombre_real
-                                
-                            hubo_cambios_de_estado = True
-                            continue 
-
                         estado_real = info_final.get('status', 'unknown')
                         error_code = info_final.get('errorCode', '0')
                         
                         if estado_real == 'complete':
                             if "Completado" not in item_ui.estado:
-                                self.log(f"🎉 INSTALACIÓN COMPLETADA: {item_ui.nombre}")
+                                self.log(f"🎉 DESCARGA COMPLETADA: {item_ui.nombre}")
                                 item_ui.progreso = "100%"
                                 item_ui.estado = "✅ Completado"
                                 item_ui.velocidad = "-"
@@ -358,8 +366,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         import subprocess
         import os
         
-        ruta_descargas = os.path.abspath("./descargas_prueba") 
-        
+        ruta_descargas = os.path.abspath("./Descargas") 
         if not os.path.exists(ruta_descargas):
             os.makedirs(ruta_descargas)
             
@@ -392,7 +399,7 @@ class DescargaItem(GObject.Object):
 
 class MiGestorApp(Adw.Application):
     def __init__(self):
-        super().__init__(application_id="com.mi.gestor", flags=Gio.ApplicationFlags.FLAGS_NONE)
+        super().__init__(application_id="com.mi.gestor.corporativo", flags=Gio.ApplicationFlags.FLAGS_NONE)
     def do_activate(self):
         win = VentanaPrincipal(self)
         win.present()
