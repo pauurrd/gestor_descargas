@@ -67,40 +67,55 @@ def resolver_url(url_usuario, proxy=None):
     print("[*] Enlace genérico/vídeo detectado. Delegando a yt-dlp...")
     return extraer_enlace_real(url_usuario, proxy)
 
-def enviar_a_aria2(enlace_directo, nombre_archivo, proxy=None):
-    print(f"[*] Enviando {nombre_archivo} a aria2...")
+def enviar_a_aria2(lista_urls, nombre_archivo, proxy=None, auth=None):
     rpc_url = "http://localhost:6800/jsonrpc"
     
+    if isinstance(lista_urls, str):
+        lista_urls = [lista_urls]
+
     opciones = {
         "out": nombre_archivo,
-        "split": "4",
-        "max-connection-per-server": "4"
+        "split": "4",                     # Divide el archivo en 4 partes (reducir en caso de saturar el proxy)
+        "max-connection-per-server": "4", # Abre 4 conexiones hacia el servidor (reducir para evitar que nos bloquee el servidor)
+                                          # Si se reducen las anteriores se perderá mucha velocidad
+        "min-split-size": "5M",
+        "uri-selector": "feedback",
+        "timeout": "120",
+        "connect-timeout": "60",
+        "max-tries": "15",
+        "retry-wait": "10",
+        "continue": "true",
+        "always-resume": "true",
+        "max-file-not-found": "10"
     }
 
     if proxy:
         print(f"[*] 🛡️ Enrutando descarga a través del proxy: {proxy}")
         opciones["all-proxy"] = proxy
+        opciones["disable-ipv6"] = "true"
     else:
         print("[*] ⚠️ ADVERTENCIA: Usando conexión directa (Sin Proxy)")
     
+    if auth:
+        tipo = auth.get('tipo', '').lower()
+        if tipo == 'basic':
+            opciones["http-user"] = auth.get('user')
+            opciones["http-passwd"] = auth.get('pass')
+        elif tipo == 'token':
+            opciones["header"] = [f"Authorization: Bearer {auth.get('token')}"]
+    
     payload = {
         "jsonrpc": "2.0",
-        "id": "gestor_corporativo",
+        "id": "batch_import",
         "method": "aria2.addUri",
-        "params": [
-            [enlace_directo],
-            opciones
-        ]
+        "params": [lista_urls, opciones]
     }
     
     try:
         respuesta = requests.post(rpc_url, json=payload)
-        datos = respuesta.json()
-        if "error" in datos:
-            print(f"[-] ARIA2 RECHAZÓ EL ENLACE: {datos['error'].get('message', 'Desconocido')}")
-        return datos
+        return respuesta.json()
     except Exception as e:
-        print(f"[-] Error conectando con aria2: {e}")
+        print(f"[-] Error en batch: {e}")
         return None
 
 def obtener_estado_aria2():

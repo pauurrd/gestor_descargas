@@ -61,8 +61,12 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         btn_descargar.add_css_class("suggested-action")
         btn_descargar.connect("clicked", self.on_btn_descargar_clicked)
         
+        btn_importar = Gtk.Button(label="📄 Importar JSON")
+        btn_importar.connect("clicked", self.on_btn_importar_clicked)
+
         caja_input.append(self.entrada_url)
         caja_input.append(btn_descargar)
+        caja_input.append(btn_importar)
         caja_derecha.append(caja_input)
 
         caja_proxy = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -148,6 +152,118 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.log("Sistema iniciado y listo para uso corporativo.")
         self.sidebar.select_row(self.sidebar.get_row_at_index(0))
         GLib.timeout_add(1000, self.monitorizar_descargas)
+
+    def procesar_json_importado(self, datos_json):
+
+        descargas_unicas = {}
+        
+        for item in datos_json:
+            id_unico = item.get('id_recurso') or item['fuentes'][0]['url']
+            
+            if id_unico not in descargas_unicas:
+                descargas_unicas[id_unico] = item
+            else:
+                self.log(f"♻️ Duplicado omitido: {id_unico}")
+
+        for res_id, info in descargas_unicas.items():
+            urls = [f['url'] for f in info['fuentes']]
+            nombre = info.get('nombre', "archivo_descargado")
+            auth = info.get('auth')
+            
+            proxy = self.entrada_proxy.get_text().strip() if not self.check_directa.get_active() else None
+            threading.Thread(target=self.tarea_background_multiple, args=(urls, nombre, proxy, auth)).start()
+
+    def on_btn_importar_clicked(self, btn):
+        dialog = Gtk.FileDialog(title="Seleccionar lista de descargas (JSON)")
+        filtros = Gio.ListStore.new(Gtk.FileFilter)
+        f = Gtk.FileFilter()
+        f.set_name("Archivos JSON")
+        f.add_suffix("json")
+        filtros.append(f)
+        dialog.set_filters(filtros)
+
+        dialog.open(self, None, self.al_seleccionar_archivo_json)
+
+    def al_seleccionar_archivo_json(self, dialog, resultado):
+        try:
+            archivo = dialog.open_finish(resultado)
+            if archivo:
+                import json
+                with open(archivo.get_path(), 'r') as f:
+                    datos = json.load(f)
+                
+                es_valido, mensaje_error = self.validar_estructura_json(datos)
+                if es_valido:
+                    self.log(f"✅ JSON validado correctamente. Procesando {len(datos)} elementos...")
+                    self.procesar_batch_json(datos)
+                else:
+                    self.log(f"❌ Error de formato en JSON: {mensaje_error}")
+                    
+        except Exception as e:
+            self.log(f"❌ Error crítico al leer JSON: {str(e)}")
+
+    def procesar_batch_json(self, datos):
+        procesados = set()
+        proxy_actual = self.entrada_proxy.get_text().strip() if not self.check_directa.get_active() else None
+
+        for item in datos:
+            id_unico = item.get('id_recurso') or item.get('nombre')
+            
+            urls = item.get('fuentes', [])
+            if not urls:
+                self.log(f"⚠️ Omitido: {id_unico} no tiene enlaces de descarga.")
+                continue
+
+            if id_unico in procesados:
+                self.log(f"♻️ Duplicado omitido: {id_unico}")
+                continue
+            
+            procesados.add(id_unico)
+
+            nombre_archivo = item.get('nombre', f"descarga_{id_unico}")
+            auth = item.get('auth')
+
+            self.log(f"📦 Procesando lote: {nombre_archivo} ({len(urls)} fuentes)")
+            
+            threading.Thread(
+                target=self.tarea_background_multiple, 
+                args=(urls, nombre_archivo, proxy_actual, auth)
+            ).start()
+
+    def validar_estructura_json(self, datos):
+        if not isinstance(datos, list):
+            return False, "El archivo debe contener una lista de objetos []."
+        
+        for i, item in enumerate(datos):
+            fuentes = item.get('fuentes')
+            if not fuentes or not isinstance(fuentes, list) or len(fuentes) == 0:
+                return False, f"El elemento {i+1} no tiene una lista de 'fuentes' válida."
+            
+            if not item.get('nombre') and not item.get('id_recurso'):
+                return False, f"El elemento {i+1} debe tener un 'nombre' o 'id_recurso'."
+            
+            auth = item.get('auth')
+            if auth:
+                tipo = auth.get('tipo')
+                if tipo == 'basic' and (not auth.get('user') or not auth.get('pass')):
+                    return False, f"Error en {item.get('nombre')}: Falta 'user' o 'pass' para auth basic."
+                if tipo == 'token' and not auth.get('token'):
+                    return False, f"Error en {item.get('nombre')}: Falta el campo 'token'."
+                    
+        return True, None
+
+    def tarea_background_multiple(self, urls, nombre, proxy, auth):
+        GLib.idle_add(self.log, f"Iniciando descarga múltiple: {nombre}")
+        respuesta = enviar_a_aria2(urls, nombre, proxy, auth)
+        gid = respuesta.get('result') if respuesta else None
+        
+        if gid:
+            GLib.idle_add(self.registrar_descarga_ui, gid, nombre, urls[0], proxy)
+
+    def registrar_descarga_ui(self, gid, nombre, url_ref, proxy):
+        nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_ref, proxy)
+        self.store.append(nuevo)
+        self.filtro.changed(Gtk.FilterChange.DIFFERENT)
 
     def on_check_directa_toggled(self, checkbutton):
         self.entrada_proxy.set_sensitive(not checkbutton.get_active())
@@ -343,7 +459,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                             
                         elif estado_real == 'error':
                             if "Error" not in item_ui.estado:
-                                self.log(f"⚠️ ERROR en {item_ui.nombre}. Código: {error_code}")
+                                self.log(f"⚠️ ERROR definitivo en {item_ui.nombre}. Código: {error_code}")
                                 item_ui.estado = f"❌ Error ({error_code})"
                                 item_ui.velocidad = "-"
                                 item_ui.progreso = "Fallido"
