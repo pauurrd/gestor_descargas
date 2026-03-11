@@ -46,7 +46,8 @@ def es_enlace_directo(url):
     extensiones_empresariales = [
         '.pdf', '.jpg', '.png', '.jpeg', 
         '.mp4', '.avi', '.mov', '.mkv',
-        '.zip', '.rar', '.7z', '.tar', '.gz'
+        '.zip', '.rar', '.7z', '.tar', '.gz',
+        '.bin', '.iso', '.json'
     ]
 
     if ext.lower() in extensiones_empresariales:

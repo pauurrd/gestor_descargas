@@ -3,7 +3,12 @@ services:
     image: alpine:edge
     container_name: poc-aria2-backend
     command: >
-      sh -c "apk add --no-cache aria2 && 
+      sh -c "apk add --no-cache aria2 tor privoxy && 
+      echo 'listen-address 0.0.0.0:8118' > /etc/privoxy/config &&
+      echo 'forward-socks5t / 127.0.0.1:9050 .' >> /etc/privoxy/config ;
+      tor --SocksPort 0.0.0.0:9050 &
+      privoxy /etc/privoxy/config ;
+      sleep 2 ;
       aria2c --enable-rpc 
       --rpc-listen-all=true 
       --rpc-allow-origin-all 
@@ -14,6 +19,8 @@ services:
       --min-split-size=1M"
     ports:
       - "6800:6800"
+      - "9050:9050"
+      - "8118:8118" 
     volumes:
       - ./Descargas:/downloads
       - ./aria2_config:/config

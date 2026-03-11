@@ -1,0 +1,40 @@
+[
+  {
+    "id_recurso": "alpine_linux_319",
+    "nombre": "alpine-virt-3.19.1-x86_64.iso",
+    "fuentes": [
+      "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-virt-3.19.1-x86_64.iso",
+      "http://mirror.leaseweb.com/alpine/v3.19/releases/x86_64/alpine-virt-3.19.1-x86_64.iso",
+      "http://uk.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-virt-3.19.1-x86_64.iso"
+    ],
+    "auth": null
+  },
+  {
+    "id_recurso": "test_image_small",
+    "nombre": "test_10mb.bin",
+    "fuentes": [
+      "https://speed.hetzner.de/10MB.bin",
+      "https://www.ovh.net/files/10Mb.dat"
+    ],
+    "auth": null
+  },
+  {
+    "id_recurso": "recurso_con_auth_simulada",
+    "nombre": "documento_restringido.pdf",
+    "fuentes": [
+      "https://httpbin.org/basic-auth/user/passwd"
+    ],
+    "auth": {
+      "tipo": "basic",
+      "user": "user",
+      "pass": "passwd"
+    }
+  },
+  {
+    "id_recurso": "alpine_linux_319",
+    "nombre": "alpine-duplicado-ignorar.iso",
+    "fuentes": [
+      "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-virt-3.19.1-x86_64.iso"
+    ]
+  }
+]

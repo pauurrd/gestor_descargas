@@ -1,0 +1,50 @@
+[
+  {
+    "id_recurso": "alpine_linux_319_standard",
+    "nombre": "alpine-standard-3.19.1-x86_64.iso",
+    "fuentes": [
+      "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-standard-3.19.1-x86_64.iso",
+      "http://uk.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-standard-3.19.1-x86_64.iso"
+    ],
+    "auth": null
+  },
+  {
+    "id_recurso": "video_big_buck_bunny",
+    "nombre": "big_buck_bunny_test.mp4",
+    "fuentes": [
+      "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+    ],
+    "auth": null
+  },
+  {
+    "id_recurso": "prueba_auth_basica",
+    "nombre": "test_auth_basica.json",
+    "fuentes": [
+      "https://httpbin.org/basic-auth/usuario_empresa/ContrasenaSegura123"
+    ],
+    "auth": {
+      "tipo": "basic",
+      "user": "usuario_empresa",
+      "pass": "ContrasenaSegura123"
+    }
+  },
+  {
+    "id_recurso": "prueba_token_bearer",
+    "nombre": "test_token_bearer.json",
+    "fuentes": [
+      "https://httpbin.org/bearer"
+    ],
+    "auth": {
+      "tipo": "token",
+      "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9_token_falso_de_prueba"
+    }
+  },
+  {
+    "id_recurso": "alpine_linux_319_standard",
+    "nombre": "alpine-duplicado-ignorar.iso",
+    "fuentes": [
+      "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-standard-3.19.1-x86_64.iso"
+    ],
+    "auth": null
+  }
+]
