@@ -99,6 +99,14 @@ El sistema permite importar un archivo .json con múltiples descargas. El gestor
 ]
 ```
 
+## Historial de Descargas
+Cada vez que finaliza o falla una descarga, el sistema guarda un registro en el archivo local **historial_descargas.db**. Para visualizar este historial cómodamente con una interfaz gráfica en tu sistema:
+```bash
+sudo apt install sqlitebrowser
+sqlitebrowser historial_descargas.db
+```
+En la pestaña **Browse Data**, podrás visualizar cierta información relevante a las descargas que se han realizado (Fecha y hora de la descarga, nombre del archivo, hash, url, proxy usado...).
+
 ## Cómo añadir nuevas páginas web (Provider Rules)
 Si deseas añadir soporte para extraer enlaces desde una intranet corporativa o un proveedor de vídeo privado que yt-dlp no soporta por defecto, deberás:
 1. Abrir `extractor.py`

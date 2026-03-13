@@ -2,6 +2,10 @@ import sys
 import threading
 import gi
 import os
+import hashlib
+import urllib.parse
+
+from database import init_db, registrar_descarga
 
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1') 
@@ -157,6 +161,8 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.paned_principal.set_end_child(notebook)
 
         self.log("Sistema iniciado y listo para uso corporativo.")
+        init_db() 
+        self.log("🗄️ Base de datos local conectada.")
         self.sidebar.select_row(self.sidebar.get_row_at_index(0))
         self.comprobar_proxy_sistema()
         GLib.timeout_add(1000, self.monitorizar_descargas)
@@ -387,6 +393,29 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             else:
                 self.log(f"❌ Fallo al intentar reiniciar {item.nombre} en aria2.")
 
+    def guardar_historial_background(self, nombre_json, url_origen, proxy, estado_final):
+        ruta_url = urllib.parse.urlparse(url_origen).path
+        nombre_original = os.path.basename(ruta_url)
+        if not nombre_original:
+            nombre_original = "Desconocido/Generado"
+
+        hash_archivo = "-"
+        if "Completado" in estado_final:
+            ruta_local = os.path.join(os.path.abspath("./Descargas"), nombre_json)
+            if os.path.exists(ruta_local):
+                sha256 = hashlib.sha256()
+                try:
+                    with open(ruta_local, "rb") as f:
+                        for bloque in iter(lambda: f.read(8192), b""):
+                            sha256.update(bloque)
+                    hash_archivo = sha256.hexdigest()
+                except Exception as e:
+                    hash_archivo = f"Error al leer: {e}"
+        else:
+            hash_archivo = "No aplicable (Fallido)"
+
+        registrar_descarga(nombre_json, nombre_original, hash_archivo, url_origen, proxy, estado_final)
+
     def on_btn_pausar_clicked(self, btn):
         item = self.selection_model.get_selected_item()
         if not item or item.gid.startswith("error_"): return
@@ -529,12 +558,22 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                                 total = int(info_final.get('totalLength', 0))
                                 item_ui.tamano = formatear_tamano(total)
                             
+                                threading.Thread(
+                                    target=self.guardar_historial_background, 
+                                    args=(item_ui.nombre, item_ui.url, item_ui.proxy, "Completado")
+                                ).start()
+                                
                         elif estado_real == 'error':
                             if "Error" not in item_ui.estado:
                                 self.log(f"⚠️ ERROR definitivo en {item_ui.nombre}. Código: {error_code}")
                                 item_ui.estado = f"❌ Error ({error_code})"
                                 item_ui.velocidad = "-"
                                 item_ui.progreso = "Fallido"
+                        
+                                threading.Thread(
+                                    target=self.guardar_historial_background, 
+                                    args=(item_ui.nombre, item_ui.url, item_ui.proxy, f"Error ({error_code})")
+                                ).start()
                         
                         elif estado_real == 'removed':
                             item_ui.estado = "🗑️ Eliminado"
