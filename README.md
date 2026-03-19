@@ -2,74 +2,112 @@
 
 Un gestor de descargas moderno, modular y nativo para Linux (GNOME) escrito en Python, diseñado específicamente para entornos empresariales y peticiones seguras.
 
-Utiliza una arquitectura dividida en tres capas: **GTK4/Libadwaita** para una interfaz nativa hermosa, un **Router Inteligente** en Python, y un motor **Aria2** corriendo de forma aislada en Docker junto a **Tor** y **Privoxy** para maximizar el ancho de banda y enrutar el tráfico de forma segura y anónima.
+Utiliza una arquitectura dividida en tres capas: **GTK4/Libadwaita** para una interfaz nativa, un **Router Inteligente** en Python, y un motor **Aria2** corriendo de forma aislada en Docker junto a **Tor** y **Privoxy** para maximizar el ancho de banda y enrutar el tráfico de forma segura y anónima.
 
 ## Características Principales
 
 * **Interfaz Nativa GNOME:** Construida con GTK4 y Libadwaita para integrarse perfectamente con el ecosistema de Linux moderno.
-* **Descargas Multiparte Optimizadas:** Alimentado por `aria2`, soporta descargas HTTP/HTTPS y FTP ultrarrápidas dividiendo los archivos en múltiples conexiones simultáneas.
-* **Enrutamiento Corporativo Avanzado:** * Detección automática del proxy del SO (GNOME Settings o variables de entorno).
+* **Descargas Multiparte Optimizadas:** Alimentado por `aria2`, soporta descargas HTTP/HTTPS y FTP ultrarrápidas dividiendo los archivos en múltiples conexiones simultáneas desde diferentes hosts.
+* **Enrutamiento Corporativo Avanzado:**
+  * Detección automática del proxy del SO (GNOME Settings o variables de entorno).
   * Opción manual y segura para "Forzar Descarga Directa" (ignorar proxy).
 * **Red Tor Integrada:** Opción en las configuraciones avanzadas para enrutar todo el tráfico de descarga a través de la red Tor de forma transparente.
-* **Importación por Lotes (JSON):** Soporte para importar listas masivas de descargas. El sistema gestiona automáticamente múltiples fuentes (espejos) para un mismo archivo y omite descargas duplicadas.
-* **Autenticación Nativa:** Soporte integrado para inyectar credenciales (Basic Auth) o Tokens de acceso (Bearer Tokens) en descargas protegidas a través del archivo JSON.
-* **Extractor Inteligente (Router):** * Filtro de extensiones empresariales (`.zip`, `.pdf`, `.mp4`, `.iso`, etc.).
+* **Importación por Lotes y Grupos (JSON):** Soporte para importar listas masivas de descargas simples o archivos divididos en partes lógicas. El sistema gestiona automáticamente múltiples fuentes (espejos) para un mismo archivo y omite descargas duplicadas.
+* **Autenticación Nativa:** Soporte integrado para inyectar credenciales (Basic Auth) o Tokens de acceso (Bearer Tokens) en descargas protegidas a través del archivo JSON. Cada parte de un mismo archivo puede autenticarse contra un host diferente.
+* **Extractor Inteligente (Router):**
+  * Filtro de extensiones empresariales clasificadas por tipología (`.zip`, `.pdf`, `.mp4`, `.iso`, etc.).
   * Soporte integrado para extraer vídeos corporativos usando `yt-dlp`.
 
 ## Arquitectura del Sistema
 
-El proyecto se compone de piezas fundamentales que se comunican entre sí aislando la lógica de la red:
+El proyecto se compone de piezas fundamentales que se comunican entre sí aislando la lógica de la red. A continuación se muestra el flujo de la información:
 
-1. **La Interfaz (UI):** `main_ui.py` (Maneja la ventana de GTK4, importación de JSON, validación de protocolos y los bucles de monitorización asíncrona).
-2. **Las Reglas (Backend):** `extractor.py` (Filtra URLs, extrae enlaces directos, estructura las peticiones de autenticación y gestiona la comunicación RPC).
-3. **El Motor Docker (Red):** Definido en `docker-compose.yml`, despliega un entorno aislado con tres servicios internos:
-   * `aria2-rpc`: El músculo que realiza las descargas reales.
-   * `tor`: Cliente SOCKS5 para enrutar tráfico a la red Onion.
-   * `privoxy`: Traductor de red que convierte las peticiones HTTP puras de Aria2 al protocolo SOCKS5 que entiende Tor.
+1. **La Interfaz (UI):** `main_ui.py` — Maneja la ventana GTK4, importación de JSON, validación de protocolos y los bucles de monitorización asíncrona.
+2. **Las Reglas (Backend):** `extractor.py` — Filtra URLs, extrae enlaces directos, estructura las peticiones de autenticación y gestiona la comunicación RPC con aria2.
+3. **La Lambda de autenticación:** `lambda_auth.py` — Valida la cabecera `X-My-App-Auth` y genera URLs presignadas de S3 con firma V4.
+
+```text
+[ Interfaz GTK4 ] <---(JSON / RPC)---> [ Router Python / Extractor (yt-dlp) ]
+                                                    |
+                                         (Petición con X-My-App-Auth)
+                                                    v
+                                          [ Proxy Squid (EC2) ]
+                                          /         |         \
+                                         v          v          v
+                               [ API Gateway 1 ] [ API Gateway 2 ] [ API Gateway 3 ]
+                               Bearer token 1    Basic auth        Bearer token 2
+                                         \          |          /
+                                          v         v         v
+                               [ Lambda 1 ]    [ Lambda 2 ]    [ Lambda 3 ]
+                               valida auth     valida auth     valida auth
+                               presigned URL   presigned URL   presigned URL
+                                         \          |          /
+                                          v         v         v
+                               [ S3 bucket_a ] [ S3 bucket_b ] [ S3 bucket_c ]
+                                  .7z.001         .7z.002         .7z.003
+                                          \          |          /
+                                           v         v         v
+  [ Contenedor Docker (Red Aislada) ]------------------------------------------
+  |                                                                            |
+  |  [ Aria2c ] <---- datos binarios en paralelo desde los 3 buckets           |
+  |      |                                                                     |
+  |      +-------------> [ Privoxy ] ---> [ Tor SOCKS5 ] ---> (Red Onion)      |
+  -----------------------------------------------------------------------------
+```
+
+### Puertos Expuestos (Docker)
+
+El contenedor de red expone 3 puertos esenciales para el funcionamiento del sistema:
+
+- **6800 (Aria2 RPC):** Puerto de control interno. Permite que la aplicación en Python envíe comandos de descarga y consulte el estado del progreso sin interactuar directamente con la consola.
+- **8118 (Privoxy HTTP):** Traductor local. Aria2 no habla el protocolo nativo de Tor, por lo que envía sus peticiones HTTP a este puerto, y Privoxy se encarga de empaquetarlas hacia Tor.
+- **9050 (Tor SOCKS5):** Puerto nativo de la red Tor. Se expone por si el usuario necesita enrutar el tráfico a través de la red Onion.
 
 ## Requisitos Previos
 
 Asegúrate de tener un entorno **Debian/Ubuntu** con Docker instalado.
 
 ### 1. Dependencias del Sistema (Linux)
-Instala los componentes de GTK4 y Docker ejecutando:
+
 ```bash
 sudo apt update
 sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 python3-pip docker.io docker-compose
 ```
 
-### 2. Dependencias de python
-Instala las librerías necesarias para el backend de extracción y comunicación:
+### 2. Dependencias de Python
+
 ```bash
 pip3 install yt-dlp requests --break-system-packages
 ```
-*(Nota: En entornos de producción modernos, se recomienda usar un entorno virtual venv).*
 
+*(Nota: En entornos de producción modernos, se recomienda usar un entorno virtual `venv`).*
 
-
-## Instalación y uso
+## Instalación y Uso
 
 ### 1. Levantar el motor (Docker)
-Antes de abrir la aplicación, asegúrate de levantar la infraestructura de red. Este comando enciende de forma aislada Aria2, Tor y Privoxy:
+
+Antes de abrir la aplicación, asegúrate de levantar la infraestructura de red:
+
 ```bash
 docker-compose up -d
 ```
-Las descargas se guardarán automáticamente en la carpeta local `./Descargas` que el sistema creará en la raíz del proyecto.
+
+Las descargas se guardarán automáticamente en la carpeta local `./Descargas`.
 
 ### 2. Iniciar la Aplicación
-Una vez el motor esté encendido y el puerto 6800 expuesto, ejecuta la interfaz gráfica:
+
 ```bash
 python3 main_ui.py
 ```
 
 ## Formato de Importación JSON
-El sistema permite importar un archivo .json con múltiples descargas. El gestor escogerá la fuente más rápida y aplicará la autenticación correspondiente si es necesaria.
 
-**Ejemplo de estructura soportada:**
+El sistema permite importar listas de descargas utilizando un formato estructurado. Soporta tanto descargas simples como agrupaciones lógicas de archivos (por ejemplo, partes de un mismo backup alojadas en distintos servidores con autenticación diferente por parte).
+
 ```json
 [
   {
-    "id_recurso": "archivo_publico_01",
+    "id_recurso": "archivo_simple",
     "nombre": "documento_abierto.pdf",
     "fuentes": [
       "https://servidor1.com/doc.pdf",
@@ -78,14 +116,23 @@ El sistema permite importar un archivo .json con múltiples descargas. El gestor
     "auth": null
   },
   {
-    "id_recurso": "archivo_restringido_basic",
-    "nombre": "datos_internos.zip",
-    "fuentes": ["http://intranet.empresa.local/datos.zip"],
+    "id_recurso": "grupo_backup_semanal",
+    "nombre_grupo": "Backup BD 2026",
     "auth": {
       "tipo": "basic",
       "user": "admin",
       "pass": "supersecreto123"
-    }
+    },
+    "archivos": [
+      {
+        "nombre": "datos.part1.rar",
+        "fuentes": ["http://host1.com/datos.part1.rar", "http://host1.1.com/datos.part1.rar"]
+      },
+      {
+        "nombre": "datos.part2.rar",
+        "fuentes": ["http://host2.com/datos.part2.rar"]
+      }
+    ]
   },
   {
     "id_recurso": "archivo_api_token",
@@ -100,19 +147,25 @@ El sistema permite importar un archivo .json con múltiples descargas. El gestor
 ```
 
 ## Historial de Descargas
-Cada vez que finaliza o falla una descarga, el sistema guarda un registro en el archivo local **historial_descargas.db**. Para visualizar este historial cómodamente con una interfaz gráfica en tu sistema:
+
+Cada vez que finaliza o falla una descarga, el sistema guarda un registro en el archivo local `historial_descargas.db`. Para visualizarlo:
+
 ```bash
 sudo apt install sqlitebrowser
 sqlitebrowser historial_descargas.db
 ```
-En la pestaña **Browse Data**, podrás visualizar cierta información relevante a las descargas que se han realizado (Fecha y hora de la descarga, nombre del archivo, hash, url, proxy usado...).
 
-## Cómo añadir nuevas páginas web (Provider Rules)
-Si deseas añadir soporte para extraer enlaces desde una intranet corporativa o un proveedor de vídeo privado que yt-dlp no soporta por defecto, deberás:
-1. Abrir `extractor.py`
-2. Escribir una nueva función personalizada usando librerías como `BeautifulSoup` o `re` para escanear la web objetivo, manejar la autenticación si es necesaria, y obtener el enlace directo al archivo.
-3. Añadir la nueva regla al enrutador principal `resolver_url(url_usuario, proxy=None)`:
-```Python
+En la pestaña **Browse Data** verás información de auditoría: fecha y hora, nombre del archivo, hash SHA-256, URL de origen y proxy usado.
+
+## Cómo Añadir Nuevas Páginas Web (Provider Rules)
+
+Si deseas añadir soporte para extraer enlaces desde una intranet corporativa o un proveedor de vídeo privado que yt-dlp no soporta:
+
+1. Abrir `extractor.py`.
+2. Escribir una nueva función personalizada usando `BeautifulSoup` o `re`.
+3. Añadir la nueva regla al enrutador principal `resolver_url()`:
+
+```python
 def resolver_url(url_usuario, proxy=None):
     url_usuario = url_usuario.strip()
     if "mi-intranet-corporativa.com" in url_usuario:
@@ -122,54 +175,80 @@ def resolver_url(url_usuario, proxy=None):
 
 ## Resolución de Problemas Frecuentes y Códigos de Error
 
-El gestor está diseñado para capturar los fallos de red de Aria2 y mostrarlos en el registro de actividad o en la tabla principal. Aquí tienes los errores más comunes cuando se trabaja en entornos corporativos o proxies:
+* **Error "Aria2 rechazó el enlace" (❌ Rechazado):** El motor no pudo establecer la conexión inicial. Causas comunes: proxy caído o mal configurado, protocolo incorrecto (`socks5://` contra un puerto HTTP), o URL de S3 con firma caducada o región incorrecta.
 
-* **Error "Aria2 rechazó el enlace: Fallo de red" (al importar):** Si ves este error inmediato con el aspa roja (❌) en el registro, significa que Aria2 no ha podido ni siquiera iniciar la petición.
-  * *Causas comunes:* El proxy configurado (Privoxy o corporativo) está caído, has introducido un protocolo incorrecto (`socks5://` en un proxy HTTP), o la URL de destino es rechazada instantáneamente por el servidor (ej. un Token de AWS S3 con la región equivocada).
+* **Descargas congeladas en "Conectando...":** Ocurre en entornos corporativos al descargar desde la IP pública de la propia empresa a través del proxy interno (problema de "Hairpin NAT"). Solución: pedir al equipo de redes que habilite hairpinning o implemente Split DNS.
 
-* **Descargas congeladas en "Conectando...":** La tarea se añade a la cola pero nunca empieza a descargar ni a dar error.
-  * *Causas comunes:* Suele ocurrir por bloqueos tipo "efecto boomerang" (Hairpinning) en firewalls y Security Groups (ej. AWS). Ocurre cuando el proxy intenta salir a internet para acceder a su propia IP pública, y el firewall bloquea la petición silenciosamente. *Solución: Usar `127.0.0.1` en el JSON si el archivo está alojado en el mismo servidor que el proxy.*
+* **❌ Error (Código 1) — Conexión abortada:** La conexión fue cortada por un intermediario. Causas: proxy corporativo (Zscaler, Squid) con el método `CONNECT` bloqueado, o política de tamaño máximo de archivo activa. Contactar con el administrador de red.
 
-* **❌ Error (Código 1) - Conexión abortada:**
-  Aria2 intentó descargar pero la conexión fue cortada abruptamente por el proxy.
-  * *Causas comunes:* Ocurre muy a menudo al intentar descargar enlaces `https://` a través de proxies públicos o corporativos estrictos que tienen bloqueado el método `CONNECT` para el puerto 443. También puede ocurrir si el proxy corta la conexión al detectar un archivo demasiado grande.
+* **❌ Error (Código 4) — Recurso no encontrado (HTTP 404):** La URL del API Gateway es correcta pero la ruta no existe. En la infraestructura de pruebas, asegurarse de que las rutas de los API Gateways están configuradas como `$default` y no como rutas específicas (`GET /download`).
 
-* **❌ Error (Código 22) - Cabecera HTTP inesperada:**
-  Aria2 esperaba recibir los bytes de un archivo (.zip, .pdf, etc.), pero en su lugar recibió código HTML de una página web de error.
-  * *Causas comunes:* Problemas de Autenticación o Permisos. El servidor web de destino está devolviendo un error `401 Unauthorized` o `403 Forbidden` porque faltan las credenciales (Auth Basic) o el Token Bearer es incorrecto. También ocurre si la configuración interna del proxy (ej. Squid) está configurada en `deny all` y devuelve una página web de "Acceso Denegado".
-
-
+* **❌ Error (Código 22) — Respuesta HTTP inesperada (HTTP 403/401):** El gestor recibió una respuesta de error en lugar de datos binarios. Causas comunes:
+  * **Auth incorrecta:** Revisar el bloque `"auth"` del JSON. El valor de `X-My-App-Auth` debe coincidir exactamente con el `EXPECTED_AUTH` de la Lambda (incluyendo el prefijo `Bearer ` o `Basic `).
+  * **Doble redirect en S3:** Si la Lambda genera URLs presignadas sin `endpoint_url` explícito, boto3 usa el endpoint global de S3 y éste hace un redirect interno al endpoint regional. La firma queda ligada al host original y el segundo request devuelve 403. Solución: instanciar el cliente S3 con `endpoint_url='https://s3.eu-west-1.amazonaws.com'` (ajustar la región según corresponda).
+  * **Proxy corporativo inyectando HTML:** Si el recurso es público pero sigue fallando, la seguridad perimetral puede estar bloqueando la URL e inyectando una página de advertencia HTML.
 
 ## ☁️ Entorno de Pruebas en AWS (Terraform)
 
-Para facilitar el desarrollo y la validación del gestor, este repositorio incluye un archivo `main.tf` que levanta automáticamente una infraestructura de pruebas segura en Amazon Web Services (AWS). 
+Este repositorio incluye `main.tf` y `lambda_auth.py` para levantar automáticamente una infraestructura de pruebas en AWS que valida el flujo completo de descarga multi-host con autenticación diferente por parte.
 
-Esta infraestructura despliega:
-* Un servidor **EC2** con un Proxy configurado (`Squid`) y un servidor Web local (`Nginx`) preparado con rutas de Autenticación Básica y Token Bearer.
-* Un **Bucket S3** con archivos públicos y privados de prueba.
-* Un **Security Group dinámico** que detecta tu IP pública en el momento de la creación y bloquea el acceso a cualquier otra persona en el mundo.
+### Qué despliega
 
-### Requisitos
-1. [Terraform](https://developer.hashicorp.com/terraform/downloads) instalado en tu sistema.
-2. [AWS CLI](https://aws.amazon.com/cli/) instalada y configurada con tus credenciales.
+* **EC2 con Squid Proxy** — enruta el tráfico saliente de aria2. El Security Group se configura dinámicamente con tu IP pública en el momento del `apply`.
+* **3 API Gateways HTTP** (uno por parte del archivo), cada uno con integración explícita `AWS_PROXY` y `payload_format_version = "2.0"` para garantizar que las cabeceras llegan a la Lambda como diccionario.
+* **3 Funciones Lambda** (`lambda_auth.py`) — validan la cabecera `X-My-App-Auth` contra la variable de entorno `EXPECTED_AUTH` y generan una URL presignada S3 con firma V4. Usan `endpoint_url` regional explícito para evitar el doble redirect que invalidaría la firma.
+* **3 Buckets S3 privados** — cada uno contiene una parte del archivo de prueba (`.7z.001`, `.7z.002`, `.7z.003`).
 
-### Instrucciones de Despliegue
+### Autenticación por Gateway
 
-1. Abre una terminal en el directorio donde se encuentra el archivo `main.tf`.
-2. Inicializa el entorno de Terraform:
-   ```bash
-   terraform init
-   ```
-3. Aplica los cambios para construir la infraestructura:
-   ```bash
-   terraform apply
-   ```
-   *(Revisa el plan y escribe **yes** para confirmar).*
-4. Al terminar (tardará un par de minutos), la consola imprimirá unos Outputs. Ahí verás la IP y el puerto de tu nuevo proxy, junto con las instrucciones y URLs necesarias para probar el archivo de importación JSON.
+| Gateway | Método | Cabecera esperada |
+|---------|--------|-------------------|
+| API Gateway 1 | Bearer Token | `X-My-App-Auth: Bearer MI_TOKEN_SECRETO_123` |
+| API Gateway 2 | Basic Auth | `X-My-App-Auth: Basic YWRtaW46c3VwZXJzZWNyZXRvMTIz` |
+| API Gateway 3 | Bearer Token | `X-My-App-Auth: Bearer TOKEN_DEBIAN_3` |
 
-**Limpieza**
-Para evitar cargos innecesarios en tu cuenta de AWS, recuerda destruir toda la infraestructura en cuanto termines de hacer tus pruebas de descarga:
+### Preparar el archivo de prueba
+
+El archivo de prueba debe dividirse en partes con 7-Zip antes del `terraform apply`. En Linux:
+
+```bash
+# Descargar una ISO de prueba
+wget https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.5.0-amd64-netinst.iso
+
+# Dividir en partes de 300 MB
+7z a -v300m debian-split.7z debian-12.5.0-amd64-netinst.iso
+# Genera: debian-split.7z.001, debian-split.7z.002, debian-split.7z.003 ...
+```
+
+En Windows con 7-Zip: botón derecho sobre el archivo → *Añadir al archivo* → en "Dividir en volúmenes de" escribir `300m`.
+
+Coloca los archivos `.7z.001`, `.7z.002`, `.7z.003` en la misma carpeta que `main.tf` antes de aplicar.
+
+### Despliegue
+
+```bash
+terraform init
+terraform apply
+```
+
+Al terminar, el output mostrará la IP del proxy y las URLs de los tres API Gateways. Úsalas en tu JSON de importación.
+
+### Ensamblado tras la descarga
+
+Una vez descargadas las tres partes:
+
+```bash
+7z x debian-13.2.0-amd64-netinst.7z.001
+# 7-Zip detecta automáticamente las partes .001, .002, .003 y reconstruye el archivo original
+```
+
+### Limpieza
+
 ```bash
 terraform destroy
 ```
-*(Escribe **yes** para confirmar y AWS eliminará todo el rastro).*
+
+### Requisitos
+
+* [Terraform](https://developer.hashicorp.com/terraform/downloads) instalado.
+* [AWS CLI](https://aws.amazon.com/cli/) configurada con credenciales válidas.

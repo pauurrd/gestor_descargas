@@ -5,6 +5,8 @@ import os
 import hashlib
 import urllib.parse
 
+os.environ['no_proxy'] = 'localhost,127.0.0.1,::1'
+
 from database import init_db, registrar_descarga
 
 gi.require_version('Gtk', '4.0')
@@ -278,48 +280,79 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         proxy_actual = self.entrada_proxy.get_text().strip() if not self.check_directa.get_active() else None
 
         for item in datos:
-            id_unico = item.get('id_recurso') or item.get('nombre')
+            auth_grupo = item.get('auth')
             
-            urls = item.get('fuentes', [])
-            if not urls:
-                self.log(f"⚠️ Omitido: {id_unico} no tiene enlaces de descarga.")
-                continue
+            if "archivos" in item:
+                id_grupo = item.get("id_recurso", "grupo_desconocido")
+                nombre_grupo = item.get("nombre_grupo", id_grupo)
+                
+                if id_grupo in procesados:
+                    continue
+                procesados.add(id_grupo)
+                
+                self.log(f"📦 Detectado grupo: {nombre_grupo} ({len(item['archivos'])} partes)")
+                
+                for parte in item["archivos"]:
+                    urls = parte.get("fuentes", [])
+                    nombre_parte = parte.get("nombre", "parte_desconocida")
+                    
+                    auth_parte = parte.get('auth', auth_grupo) 
+                    
+                    if not urls:
+                        continue
+                        
+                    nombre_visual = f"[{nombre_grupo}] {nombre_parte}"
+                    
+                    threading.Thread(
+                        target=self.tarea_background_multiple, 
+                        args=(urls, nombre_visual, proxy_actual, auth_parte)
+                    ).start()
+                    
+            else:
+                id_unico = item.get('id_recurso') or item.get('nombre')
+                urls = item.get('fuentes', [])
+                
+                if not urls or id_unico in procesados:
+                    continue
+                procesados.add(id_unico)
 
-            if id_unico in procesados:
-                self.log(f"♻️ Duplicado omitido: {id_unico}")
-                continue
-            
-            procesados.add(id_unico)
-
-            nombre_archivo = item.get('nombre', f"descarga_{id_unico}")
-            auth = item.get('auth')
-
-            self.log(f"📦 Procesando lote: {nombre_archivo} ({len(urls)} fuentes)")
-            
-            threading.Thread(
-                target=self.tarea_background_multiple, 
-                args=(urls, nombre_archivo, proxy_actual, auth)
-            ).start()
+                nombre_archivo = item.get('nombre', f"descarga_{id_unico}")
+                
+                threading.Thread(
+                    target=self.tarea_background_multiple, 
+                    args=(urls, nombre_archivo, proxy_actual, auth_grupo)
+                ).start()
 
     def validar_estructura_json(self, datos):
         if not isinstance(datos, list):
             return False, "El archivo debe contener una lista de objetos []."
         
         for i, item in enumerate(datos):
-            fuentes = item.get('fuentes')
-            if not fuentes or not isinstance(fuentes, list) or len(fuentes) == 0:
-                return False, f"El elemento {i+1} no tiene una lista de 'fuentes' válida."
-            
-            if not item.get('nombre') and not item.get('id_recurso'):
-                return False, f"El elemento {i+1} debe tener un 'nombre' o 'id_recurso'."
+            if "archivos" in item:
+                archivos = item.get("archivos")
+                if not isinstance(archivos, list) or len(archivos) == 0:
+                    return False, f"El grupo {i+1} no tiene una lista de 'archivos' válida."
+                
+                for j, parte in enumerate(archivos):
+                    fuentes = parte.get('fuentes')
+                    if not fuentes or not isinstance(fuentes, list) or len(fuentes) == 0:
+                        return False, f"El archivo {j+1} del grupo {i+1} no tiene una lista de 'fuentes' válida."
+            else:
+                fuentes = item.get('fuentes')
+                if not fuentes or not isinstance(fuentes, list) or len(fuentes) == 0:
+                    return False, f"El elemento {i+1} no tiene una lista de 'fuentes' válida."
+                
+                if not item.get('nombre') and not item.get('id_recurso'):
+                    return False, f"El elemento {i+1} debe tener un 'nombre' o 'id_recurso'."
             
             auth = item.get('auth')
             if auth:
                 tipo = auth.get('tipo')
+                nombre_ref = item.get('nombre_grupo') or item.get('nombre') or f"Elemento {i+1}"
                 if tipo == 'basic' and (not auth.get('user') or not auth.get('pass')):
-                    return False, f"Error en {item.get('nombre')}: Falta 'user' o 'pass' para auth basic."
+                    return False, f"Error en {nombre_ref}: Falta 'user' o 'pass' para auth basic."
                 if tipo == 'token' and not auth.get('token'):
-                    return False, f"Error en {item.get('nombre')}: Falta el campo 'token'."
+                    return False, f"Error en {nombre_ref}: Falta el campo 'token'."
                     
         return True, None
 

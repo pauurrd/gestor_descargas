@@ -2,6 +2,7 @@ import yt_dlp
 import requests
 import urllib.parse
 import os
+import base64
 
 def extraer_enlace_real(url_publica, proxy=None):
     print(f"[*] Analizando URL con yt-dlp: {url_publica}")
@@ -38,24 +39,30 @@ def extraer_enlace_real(url_publica, proxy=None):
             print(f"[-] Error al extraer con yt-dlp: {e}")
             return None, None
 
-def es_enlace_directo(url):
-    ruta = urllib.parse.urlparse(url).path
-    nombre_archivo = os.path.basename(ruta)
-    _, ext = os.path.splitext(nombre_archivo)
-    
-    extensiones_empresariales = [
-        '.pdf', '.jpg', '.png', '.jpeg', 
-        '.mp4', '.avi', '.mov', '.mkv',
-        '.zip', '.rar', '.7z', '.tar', '.gz',
-        '.bin', '.iso', '.json'
-    ]
+EXTENSIONES_EMPRESARIALES = {
+    "Texto": [".txt", ".md", ".rtf"],
+    "Ofimática": [".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp"],
+    "Imagen": [".jpg", ".gif", ".bmp", ".png", ".heic", ".webp"],
+    "Vídeo": [".avi", ".mov", ".mp4", ".mpeg", ".wmv"],
+    "Ejecución del sistema": [".exe", ".bat", ".dll", ".sys"],
+    "Audio": [".mp3", ".aac", ".ogg", ".wav", ".wma"],
+    "Archivo comprimido": [".zip", ".rar", ".tar"],
+    "Lectura": [".pdf", ".epub", ".azw", ".ibook"],
+    "Imagen de disco": [".iso", ".mds", ".img"]
+}   
 
-    if ext.lower() in extensiones_empresariales:
-        if not nombre_archivo:
-            nombre_archivo = "documento_empresarial" + ext
-        return True, nombre_archivo
-        
-    return False, None
+def es_enlace_directo(url):
+    url_limpia = url.strip().lower()    
+    todas_las_extensiones = [ext for lista_ext in EXTENSIONES_EMPRESARIALES.values() for ext in lista_ext]
+    
+    for ext in todas_las_extensiones:
+        if url_limpia.endswith(ext) or ext + "?" in url_limpia:
+            nombre = url.split("/")[-1].split("?")[0]
+            if not nombre:
+                nombre = "archivo_descargado" + ext
+            return True, nombre
+            
+    return False, ""
 
 def resolver_url(url_usuario, proxy=None):
     url_usuario = url_usuario.strip()
@@ -76,9 +83,8 @@ def enviar_a_aria2(lista_urls, nombre_archivo, proxy=None, auth=None):
 
     opciones = {
         "out": nombre_archivo,
-        "split": "4",                     # Divide el archivo en 4 partes (reducir en caso de saturar el proxy)
-        "max-connection-per-server": "4", # Abre 4 conexiones hacia el servidor (reducir para evitar que nos bloquee el servidor)
-                                          # Si se reducen las anteriores se perderá mucha velocidad
+        "split": "4",                     
+        "max-connection-per-server": "4", 
         "min-split-size": "5M",
         "uri-selector": "feedback",
         "timeout": "120",
@@ -100,10 +106,12 @@ def enviar_a_aria2(lista_urls, nombre_archivo, proxy=None, auth=None):
     if auth:
         tipo = auth.get('tipo', '').lower()
         if tipo == 'basic':
-            opciones["http-user"] = auth.get('user')
-            opciones["http-passwd"] = auth.get('pass')
+            user = auth.get('user')
+            passwd = auth.get('pass')
+            credenciales = base64.b64encode(f"{user}:{passwd}".encode('utf-8')).decode('utf-8')
+            opciones["header"] = [f"X-My-App-Auth: Basic {credenciales}"]
         elif tipo == 'token':
-            opciones["header"] = [f"Authorization: Bearer {auth.get('token')}"]
+            opciones["header"] = [f"X-My-App-Auth: Bearer {auth.get('token')}"]
     
     payload = {
         "jsonrpc": "2.0",
