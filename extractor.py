@@ -175,3 +175,15 @@ def reanudar_descarga_aria2(gid):
 def cancelar_descarga_aria2(gid):
     try: requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "remove", "method": "aria2.remove", "params": [gid]})
     except: pass
+
+def configurar_limite_descargas(max_concurrentes=2):
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "config_limit",
+        "method": "aria2.changeGlobalOption",
+        "params": [{"max-concurrent-downloads": str(max_concurrentes)}]
+    }
+    try:
+        requests.post("http://localhost:6800/jsonrpc", json=payload)
+    except Exception as e:
+        print(f"[-] Error al configurar límite de colas: {e}")  

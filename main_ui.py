@@ -15,7 +15,8 @@ from gi.repository import Gtk, Adw, Gio, GLib, GObject
 
 from extractor import (resolver_url, enviar_a_aria2, obtener_estado_aria2, 
                        formatear_tamano, obtener_info_gid, 
-                       pausar_descarga_aria2, reanudar_descarga_aria2, cancelar_descarga_aria2)
+                       pausar_descarga_aria2, reanudar_descarga_aria2, cancelar_descarga_aria2,
+                       configurar_limite_descargas)
 
 class VentanaPrincipal(Adw.ApplicationWindow):
     def __init__(self, app):
