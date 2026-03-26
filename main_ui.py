@@ -4,6 +4,9 @@ import gi
 import os
 import hashlib
 import urllib.parse
+import json
+from schemas import RecursoImportacion
+from pydantic import ValidationError
 
 os.environ['no_proxy'] = 'localhost,127.0.0.1,::1'
 
@@ -323,38 +326,40 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                     args=(urls, nombre_archivo, proxy_actual, auth_grupo)
                 ).start()
 
-    def validar_estructura_json(self, datos):
-        if not isinstance(datos, list):
-            return False, "El archivo debe contener una lista de objetos []."
-        
-        for i, item in enumerate(datos):
-            if "archivos" in item:
-                archivos = item.get("archivos")
-                if not isinstance(archivos, list) or len(archivos) == 0:
-                    return False, f"El grupo {i+1} no tiene una lista de 'archivos' válida."
+    def al_seleccionar_archivo_json(self, dialog, resultado):
+        try:
+            archivo = dialog.open_finish(resultado)
+            if archivo:
+                with open(archivo.get_path(), 'r') as f:
+                    datos_crudos = json.load(f)
                 
-                for j, parte in enumerate(archivos):
-                    fuentes = parte.get('fuentes')
-                    if not fuentes or not isinstance(fuentes, list) or len(fuentes) == 0:
-                        return False, f"El archivo {j+1} del grupo {i+1} no tiene una lista de 'fuentes' válida."
-            else:
-                fuentes = item.get('fuentes')
-                if not fuentes or not isinstance(fuentes, list) or len(fuentes) == 0:
-                    return False, f"El elemento {i+1} no tiene una lista de 'fuentes' válida."
+                if not isinstance(datos_crudos, list):
+                    self.log("❌ Error: El JSON debe contener una lista [].")
+                    return
                 
-                if not item.get('nombre') and not item.get('id_recurso'):
-                    return False, f"El elemento {i+1} debe tener un 'nombre' o 'id_recurso'."
-            
-            auth = item.get('auth')
-            if auth:
-                tipo = auth.get('tipo')
-                nombre_ref = item.get('nombre_grupo') or item.get('nombre') or f"Elemento {i+1}"
-                if tipo == 'basic' and (not auth.get('user') or not auth.get('pass')):
-                    return False, f"Error en {nombre_ref}: Falta 'user' o 'pass' para auth basic."
-                if tipo == 'token' and not auth.get('token'):
-                    return False, f"Error en {nombre_ref}: Falta el campo 'token'."
+                datos_validados = []
+                errores = 0
+                
+                # Pasamos cada elemento por el colador de Pydantic
+                for i, item in enumerate(datos_crudos):
+                    try:
+                        recurso_seguro = RecursoImportacion(**item)
+                        # by_alias=True es vital para que "pass" vuelva a ser "pass" y no "password"
+                        datos_validados.append(recurso_seguro.model_dump(by_alias=True, exclude_none=True))
+                    except ValidationError as e:
+                        errores += 1
+                        self.log(f"⚠️ Error de seguridad/formato en el elemento {i+1}. Ignorado.")
+                        print(f"Detalle Pydantic: {e}")
+                
+                if datos_validados:
+                    self.log(f"✅ JSON validado: {len(datos_validados)} elementos seguros ({errores} ignorados por fallos).")
+                    self.procesar_batch_json(datos_validados)
+                else:
+                    self.log("❌ Ningún elemento del JSON pasó el filtro de seguridad (Pydantic).")
                     
-        return True, None
+        except Exception as e:
+            self.log(f"❌ Error crítico al leer JSON: {str(e)}")
+            
 
     def tarea_background_multiple(self, urls, nombre, proxy, auth):
         GLib.idle_add(self.log, f"Iniciando descarga múltiple: {nombre}")
