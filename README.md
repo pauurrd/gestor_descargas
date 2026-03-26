@@ -76,11 +76,18 @@ sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 python3
 
 ### 2. Dependencias de Python
 
+Se recomienda encarecidamente utilizar un entorno virtual para no interferir con los paquetes del sistema:
+
 ```bash
-pip3 install yt-dlp requests --break-system-packages
+sudo apt install python3-venv
+python3 -m venv venv
+source venv/bin/activate
+pip install yt-dlp requests
 ```
 
-*(Nota: En entornos de producción modernos, se recomienda usar un entorno virtual `venv`).*
+### 🛡️ Seguridad (Pre-commit)
+Para evitar subir credenciales por error, es obligatorio activar el escáner local antes de hacer commits:
+`pip3 install pre-commit && pre-commit install`
 
 ## Instalación y Uso
 
@@ -99,6 +106,7 @@ Las descargas se guardarán automáticamente en la carpeta local `./Descargas`.
 ```bash
 python3 main_ui.py
 ```
+
 
 ## Formato de Importación JSON
 
