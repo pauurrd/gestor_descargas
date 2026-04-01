@@ -5,20 +5,42 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  security-events: write
+  actions: read
+  contents: read
+
 jobs:
-  snyk-scan:
+  snyk-python:
     runs-on: ubuntu-latest
     steps:
       - name: Descargar el código
         uses: actions/checkout@v4
 
-      # Escaneo del código y dependencias Python
-      - name: Escanear dependencias de la App con Snyk
+      - name: Crear requirements.txt temporal
+        run: |
+          echo "yt-dlp" > requirements.txt
+          echo "requests" >> requirements.txt
+
+      - name: Escanear dependencias Python con Snyk
         uses: snyk/actions/python@master
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           args: --severity-threshold=high --sarif-file-output=snyk-code.sarif
+
+      - name: Subir reporte SARIF de Código a GitHub
+        uses: github/codeql-action/upload-sarif@v4
+        if: success() || failure()
+        with:
+          sarif_file: snyk-code.sarif
+          category: snyk-python
+
+  snyk-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
 
       - name: Construir imagen Docker de Aria2
         run: docker build -t aria2-backend:local -f Dockerfile.aria2 .
@@ -31,16 +53,9 @@ jobs:
           image: aria2-backend:local
           args: --file=Dockerfile.aria2 --severity-threshold=high --sarif-file-output=snyk-docker.sarif
 
-      - name: Subir reporte SARIF de Código a GitHub
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: snyk-code.sarif
-          category: snyk-python
-
       - name: Subir reporte SARIF de Docker a GitHub
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        if: success() || failure()
         with:
           sarif_file: snyk-docker.sarif
           category: snyk-docker
