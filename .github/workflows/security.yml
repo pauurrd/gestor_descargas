@@ -1,0 +1,46 @@
+name: Security Quality Gate
+
+on:
+  workflow_call:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  snyk-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      # Escaneo del código y dependencias Python
+      - name: Escanear dependencias de la App con Snyk
+        uses: snyk/actions/python@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high --sarif-file-output=snyk-code.sarif
+
+      - name: Construir imagen Docker de Aria2
+        run: docker build -t aria2-backend:local -f Dockerfile.aria2 .
+
+      - name: Escanear Docker con Snyk
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: aria2-backend:local
+          args: --file=Dockerfile.aria2 --severity-threshold=high --sarif-file-output=snyk-docker.sarif
+
+      - name: Subir reporte SARIF de Código a GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: snyk-code.sarif
+          category: snyk-python
+
+      - name: Subir reporte SARIF de Docker a GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: snyk-docker.sarif
+          category: snyk-docker

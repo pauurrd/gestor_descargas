@@ -6,9 +6,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  security-check:
+    uses: ./.github/workflows/security.yml
+    secrets: inherit
 
+  build:
+    needs: security-check
+    runs-on: ubuntu-latest
+    
     steps:
       - name: Descargar el código del repositorio
         uses: actions/checkout@v4

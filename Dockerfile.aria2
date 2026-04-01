@@ -1,0 +1,9 @@
+FROM alpine:3.20
+
+RUN apk add --no-cache aria2
+
+RUN mkdir -p /downloads /config
+
+EXPOSE 6800
+
+CMD ["aria2c", "--enable-rpc", "--rpc-listen-all=true", "--rpc-allow-origin-all", "--rpc-listen-port=6800", "--dir=/downloads", "--max-connection-per-server=4", "--split=4", "--min-split-size=1M", "--conf-path=/config/aria2.conf"]

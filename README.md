@@ -51,8 +51,13 @@ Utiliza una arquitectura dividida en tres capas: **GTK4/Libadwaita** para una in
 ### Puertos Expuestos (Docker)
 
 - **6800 (Aria2 RPC):** Puerto de control interno. Permite que la aplicación en Python envíe comandos de descarga y consulte el estado del progreso.
+## 🛡️ Seguridad y Quality Gate (CI/CD)
 
----
+Para garantizar que no introducimos vulnerabilidades en entornos corporativos, este proyecto cuenta con un **Quality Gate** estricto automatizado mediante GitHub Actions y Snyk.
+
+* **Imágenes Inmutables:** El motor de descargas no descarga dependencias en caliente. Usamos un `Dockerfile.aria2` dedicado basado en una imagen mínima (`alpine:3.20`) para reducir drásticamente la superficie de ataque.
+* **Bloqueo de Despliegues:** El pipeline de empaquetado (`build.yml`) depende de un escaneo previo (`security.yml`). Si Snyk detecta vulnerabilidades de nivel **Alto o Crítico** en las dependencias de Python o en la imagen Docker, el despliegue se cancela automáticamente y no se genera el instalador `.deb`.
+* **Reportes SARIF:** Los resultados del escaneo de seguridad se suben automáticamente a la pestaña *Security* de GitHub para facilitar la auditoría.
 
 ## Guía de Instalación para Nuevos Usuarios
 
@@ -60,7 +65,6 @@ Esta sección está dirigida a usuarios finales o al departamento de IT que inst
 
 Hay dos métodos de instalación. El **método recomendado** es mediante el paquete `.deb`, que automatiza todos los pasos. El método manual se mantiene como alternativa para entornos de desarrollo.
 
----
 
 ### Método 1 — Instalación mediante paquete .deb (recomendado)
 
@@ -96,7 +100,7 @@ Busca **Gestor de Descargas** en el menú de aplicaciones de GNOME, o desde term
 gestor-descargas
 ```
 
----
+
 
 ### Método 2 — Instalación manual desde el repositorio (desarrollo)
 
@@ -125,11 +129,21 @@ git clone https://github.com/pauurrd/gestor_descargas.git
 cd gestor_descargas
 ```
 
-#### Paso 4 — Instalar dependencias de Python
+#### Paso 4 — Crear entorno virtual e instalar dependencias
+
+Para evitar conflictos con los paquetes del sistema, instalaremos las dependencias en un entorno aislado (`venv`):
 
 ```bash
-pip3 install yt-dlp requests --break-system-packages
+# Crear el entorno virtual en la carpeta del proyecto
+python3 -m venv venv
+
+# Activar el entorno virtual
+source venv/bin/activate
+
+# Instalar dependencias de forma segura
+pip install yt-dlp requests
 ```
+(Recuerda que deberás ejecutar `source venv/bin/activate` cada vez que abras una terminal nueva para trabajar en el proyecto).
 
 #### Paso 5 — Añadir tu usuario al grupo Docker
 
@@ -158,6 +172,8 @@ docker ps
 
 #### Paso 7 — Iniciar la aplicación
 
+Asegúrate de tener el entorno virtual activado y ejecuta:
+
 ```bash
 python3 main_ui.py
 ```
@@ -167,7 +183,6 @@ python3 main_ui.py
 > GSK_RENDERER=cairo python3 main_ui.py
 > ```
 
----
 
 ## Generación del Paquete .deb (desarrolladores)
 
@@ -200,7 +215,6 @@ packaging/
         └── gestor-descargas.desktop ← entrada menú GNOME
 ```
 
----
 
 ## Uso Básico
 
@@ -221,7 +235,6 @@ Selecciona cualquier descarga de la lista para activar los botones de acción:
 * **Cancelar** — cancela y elimina la tarea.
 * **Abrir Carpeta** — abre el explorador de archivos en la carpeta de descargas.
 
----
 
 ## Formato de Importación JSON
 
@@ -269,7 +282,6 @@ Soporta descargas simples, espejos (múltiples fuentes para el mismo archivo) y 
 ]
 ```
 
----
 
 ## Historial de Descargas
 
@@ -282,7 +294,6 @@ sqlitebrowser historial_descargas.db
 
 En la pestaña **Browse Data** verás: fecha y hora, nombre del archivo, hash SHA-256, URL de origen y proxy usado.
 
----
 
 ## Cómo Añadir Nuevas Páginas Web (Provider Rules)
 
@@ -300,7 +311,6 @@ def resolver_url(url_usuario, proxy=None):
     es_directo, nombre_archivo = es_enlace_directo(url_usuario)
 ```
 
----
 
 ## Resolución de Problemas Frecuentes y Códigos de Error
 
@@ -319,7 +329,6 @@ def resolver_url(url_usuario, proxy=None):
   * **Doble redirect en S3:** Si la Lambda genera URLs presignadas sin `endpoint_url` explícito, boto3 usa el endpoint global de S3 y éste hace un redirect interno al endpoint regional. La firma queda ligada al host original y el segundo request devuelve 403. Solución: instanciar el cliente S3 con `endpoint_url='https://s3.eu-west-1.amazonaws.com'` (ajustar la región según corresponda).
   * **Proxy corporativo inyectando HTML:** Si el recurso es público pero sigue fallando, la seguridad perimetral puede estar bloqueando la URL e inyectando una página de advertencia HTML.
 
----
 
 ## ☁️ Entorno de Pruebas en AWS (Terraform)
 
