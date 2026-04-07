@@ -76,38 +76,8 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         caja_input.append(btn_importar)
         caja_derecha.append(caja_input)
 
-        caja_proxy = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        caja_proxy.set_margin_start(10)
-        caja_proxy.set_margin_end(10)
-        
-        self.lbl_proxy = Gtk.Label(label="🌐 Servidor Proxy:")
-        self.entrada_proxy = Gtk.Entry()
-        self.entrada_proxy.set_hexpand(True)
-        self.entrada_proxy.set_placeholder_text("Inserta el proxy de la empresa. Ej: http://14.56.118.34:3128") 
-        self.entrada_proxy.connect("changed", self.actualizar_luz_proxy)
-        self.lbl_luz_proxy = Gtk.Label(label="🔴 Directa")
-
-        caja_proxy.append(self.entrada_proxy)
-        caja_proxy.append(self.lbl_luz_proxy)
-        caja_derecha.append(caja_proxy)
-        
-        expander = Gtk.Expander(label="⚙️ Opciones Avanzadas")
-        expander.set_margin_start(10)
-        expander.set_margin_end(10)
-        
-        caja_avanzada = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        caja_avanzada.set_margin_top(5)
-        
-        self.check_directa = Gtk.CheckButton(label="⚠️ Forzar Descarga Directa (Ignorar Proxy)")
-        self.check_directa.connect("toggled", self.on_check_directa_toggled)
-        caja_avanzada.append(self.check_directa)
-
-        self.check_tor = Gtk.CheckButton(label="🧅 Enrutar descargas por la Red Tor")
-        self.check_tor.connect("toggled", self.on_check_tor_toggled)
-        caja_avanzada.append(self.check_tor)
-        
-        expander.set_child(caja_avanzada)
-        caja_derecha.append(expander)
+        # El proxy se lee del SO en cada descarga via leer_proxy_sistema()
+        # No se expone ningún control manual al usuario
 
         self.store = Gio.ListStore(item_type=DescargaItem)
         self.filtro = Gtk.CustomFilter.new(match_func=self.logica_de_filtrado)
@@ -166,67 +136,37 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         init_db() 
         self.log("🗄️ Base de datos local conectada.")
         self.sidebar.select_row(self.sidebar.get_row_at_index(0))
-        self.comprobar_proxy_sistema()
+        self.log("⚙️ Proxy: se leerá del SO en cada descarga.")
         GLib.timeout_add(1000, self.monitorizar_descargas)
 
-    def comprobar_proxy_sistema(self):
-        """Lee el proxy del SO (Variables de entorno o GNOME Settings)"""
-        proxy_sys = os.environ.get('http_proxy') or os.environ.get('https_proxy') or os.environ.get('HTTP_PROXY')
+    def leer_proxy_sistema(self):
+        """Lee el proxy del SO en el momento de la llamada.
+        Si GSettings está accesible, es la única fuente de verdad — su estado gana siempre,
+        incluso sobre variables de entorno del proceso. Las variables de entorno solo se usan
+        como fallback en entornos sin escritorio GNOME (servidores, CI, etc.)."""
+        try:
+            settings = Gio.Settings.new("org.gnome.system.proxy")
+            mode = settings.get_string("mode")
 
-        if not proxy_sys:
-            try:
-                settings = Gio.Settings.new("org.gnome.system.proxy")
-                if settings.get_string("mode") == "manual":
-                    http_settings = Gio.Settings.new("org.gnome.system.proxy.http")
-                    host = http_settings.get_string("host")
-                    port = http_settings.get_int("port")
-                    
-                    if host and port:
-                        proxy_sys = f"http://{host}:{port}"
-            except Exception as e:
-                pass
-        
-        if proxy_sys:
-            self.log(f"⚙️ Proxy del SO detectado e importado automáticamente: {proxy_sys}")
-            self.entrada_proxy.set_text(proxy_sys)
-            
-            self.entrada_proxy.set_sensitive(False)
-            self.check_directa.set_sensitive(False)
-            self.check_tor.set_sensitive(False) 
+            if mode == "manual":
+                http_settings = Gio.Settings.new("org.gnome.system.proxy.http")
+                host = http_settings.get_string("host")
+                port = http_settings.get_int("port")
+                if host and port:
+                    return f"http://{host}:{port}"
+            return None
 
-        self.actualizar_luz_proxy()
+        except Exception:
+            return (
+                os.environ.get('http_proxy')
+                or os.environ.get('https_proxy')
+                or os.environ.get('HTTP_PROXY')
+                or None
+            )
 
-    def actualizar_luz_proxy(self, *args):
-        if self.check_directa.get_active():
-            self.lbl_luz_proxy.set_markup("<span foreground='red'>🔴 Directa</span>")
-            return
-            
-        if hasattr(self, 'check_tor') and self.check_tor.get_active():
-            self.lbl_luz_proxy.set_markup("<span foreground='purple'>🟣 Red Tor (Privoxy)</span>")
-            return
 
-        texto = self.entrada_proxy.get_text().strip().lower()
-        
-        if not texto:
-            self.lbl_luz_proxy.set_markup("<span foreground='red'>🔴 Directa</span>")
-        elif not self.entrada_proxy.get_sensitive():
-            self.lbl_luz_proxy.set_markup("<span foreground='blue'>🔵 Proxy del Sistema Detectado</span>")
-        else:
-            self.lbl_luz_proxy.set_markup("<span foreground='green'>🟢 Proxy Activo</span>")
     
-    def on_check_tor_toggled(self, checkbutton):
-        if checkbutton.get_active():
-            self.check_directa.set_active(False) 
-            
-            self.entrada_proxy.set_text("http://127.0.0.1:8118")
-            self.entrada_proxy.set_sensitive(False)
-            self.log("🧅 Tráfico enrutado a través de la red Tor (vía Privoxy).")
-        else:
-            self.entrada_proxy.set_text("")
-            self.entrada_proxy.set_sensitive(True)
-            self.log("🌐 Red Tor desactivada.")
-            
-        self.actualizar_luz_proxy()
+
 
     def procesar_json_importado(self, datos_json):
         descargas_unicas = {}
@@ -243,7 +183,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             nombre = info.get('nombre', "archivo_descargado")
             auth = info.get('auth')
             
-            proxy = self.entrada_proxy.get_text().strip() if not self.check_directa.get_active() else None
+            proxy = self.leer_proxy_sistema()
             threading.Thread(target=self.tarea_background_multiple, args=(urls, nombre, proxy, auth)).start()
 
     def on_btn_importar_clicked(self, btn):
@@ -277,7 +217,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
 
     def procesar_batch_json(self, datos):
         procesados = set()
-        proxy_actual = self.entrada_proxy.get_text().strip() if not self.check_directa.get_active() else None
+        proxy_actual = self.leer_proxy_sistema()
 
         for item in datos:
             auth_grupo = item.get('auth')
@@ -372,36 +312,20 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.store.append(nuevo)
         self.filtro.changed(Gtk.FilterChange.DIFFERENT)
 
-    def on_check_directa_toggled(self, checkbutton):
-        if checkbutton.get_active():
-            self.check_tor.set_active(False) 
-            
-        self.entrada_proxy.set_sensitive(not checkbutton.get_active() and not self.check_tor.get_active())
-        self.actualizar_luz_proxy()
+
 
     def on_btn_descargar_clicked(self, widget=None):
         url = self.entrada_url.get_text().strip()
-        
+
         if not url:
             return
 
         if not url.startswith(('http://', 'https://', 'ftp://')):
-            self.log(f"⚠️ ERROR: El enlace '{url}' es inválido. Debe empezar obligatoriamente por http://, https:// o ftp://")
+            self.log(f"⚠️ ERROR: El enlace '{url}' es inválido. Debe empezar por http://, https:// o ftp://")
             return
 
-        if self.check_directa.get_active():
-            proxy_a_usar = None
-        else:
-            proxy_a_usar = self.entrada_proxy.get_text().strip()
-            if not proxy_a_usar:
-                self.log("⚠️ ERROR: El proxy está vacío. Escribe un proxy corporativo o marca la casilla 'Forzar Descarga Directa'.")
-                return
-            if not proxy_a_usar.startswith(('http://', 'https://', 'socks5://')):
-                self.log(f"⚠️ ERROR: El proxy '{proxy_a_usar}' es inválido. Debe empezar obligatoriamente por http://, https://, socks5://...")
-                return
-        
         self.entrada_url.set_text("")
-        threading.Thread(target=self.tarea_background, args=(url, proxy_a_usar)).start()
+        threading.Thread(target=self.tarea_background, args=(url, self.leer_proxy_sistema())).start()
 
     def on_btn_reintentar_clicked(self, btn):
         item = self.selection_model.get_selected_item()
