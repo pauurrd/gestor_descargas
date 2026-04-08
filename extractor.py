@@ -177,6 +177,18 @@ def cancelar_descarga_aria2(gid):
     except: pass
 
 def configurar_limite_descargas(max_concurrentes=2):
+    """
+    ToDo: Configurar el límite de descargas simultáneas en aria2.
+
+    NOTA DE DISEÑO:
+    El límite de descargas simultáneas idealmente debería ser dinámico y depender de:
+    1. La estabilidad de la red (medible utilizando el proxy del SO).
+    2. El nivel de confianza (health score) del host de descarga.
+    3. El peso de los archivos (a mayor peso se espera mayor estabilidad pero también menor velocidad).
+    4. La capacidad asumible de riesgo (calculada en base a las descargas pausables y pausadas).
+    
+    Actualmente se establece mediante un número fijo, ya que no hay un algoritmo que calcule esto de manera adecuada por el momento.
+    """
     payload = {
         "jsonrpc": "2.0",
         "id": "config_limit",
