@@ -3,6 +3,17 @@ import requests
 import urllib.parse
 import os
 import base64
+import logging
+import uuid
+import traceback
+
+# --- NUEVO: Sistema de Trazabilidad (Errores Opacos) ---
+logging.basicConfig(
+    filename='errores_internos.log',
+    level=logging.ERROR,
+    format='%(asctime)s - [%(levelname)s] - %(message)s'
+)
+# -------------------------------------------------------
 
 def extraer_enlace_real(url_publica, proxy=None):
     print(f"[*] Analizando URL con yt-dlp: {url_publica}")
@@ -36,7 +47,12 @@ def extraer_enlace_real(url_publica, proxy=None):
             return enlace_directo, nombre_final
             
         except Exception as e:
-            print(f"[-] Error al extraer con yt-dlp: {e}")
+            # Generar error opaco
+            trace_id = str(uuid.uuid4()).split('-')[0].upper()
+            error_oculto = f"TraceID: {trace_id} | Fallo yt-dlp | Error real: {str(e)} | StackTrace: {traceback.format_exc()}"
+            logging.error(error_oculto)
+            
+            print(f"[-] Error de extracción. Contacte a soporte con el código: {trace_id}")
             return None, None
 
 EXTENSIONES_EMPRESARIALES = {
@@ -124,7 +140,11 @@ def enviar_a_aria2(lista_urls, nombre_archivo, proxy=None, auth=None):
         respuesta = requests.post(rpc_url, json=payload)
         return respuesta.json()
     except Exception as e:
-        print(f"[-] Error en batch: {e}")
+        trace_id = str(uuid.uuid4()).split('-')[0].upper()
+        error_oculto = f"TraceID: {trace_id} | Fallo de conexión RPC Aria2 | Error real: {str(e)} | StackTrace: {traceback.format_exc()}"
+        logging.error(error_oculto)
+        
+        print(f"[-] Error interno de red. Contacte a soporte con el código: {trace_id}")
         return None
 
 def obtener_estado_aria2():
@@ -138,7 +158,11 @@ def obtener_estado_aria2():
         respuesta = requests.post("http://localhost:6800/jsonrpc", json=payload)
         datos = respuesta.json()
         if 'result' in datos: return datos['result']
-    except: return []
+    except Exception as e:
+        # Aquí no imprimimos el error opaco porque saturaría la UI (se ejecuta cada segundo)
+        trace_id = str(uuid.uuid4()).split('-')[0].upper()
+        logging.error(f"TraceID: {trace_id} | Fallo tellActive | Error: {str(e)}")
+        return []
     return []
 
 def formatear_tamano(bytes_str):
@@ -161,17 +185,23 @@ def obtener_info_gid(gid):
         respuesta = requests.post("http://localhost:6800/jsonrpc", json=payload)
         datos = respuesta.json()
         if 'result' in datos: return datos['result']
-    except: return None
+    except Exception as e:
+        trace_id = str(uuid.uuid4()).split('-')[0].upper()
+        logging.error(f"TraceID: {trace_id} | Fallo tellStatus | Error: {str(e)}")
+        return None
     return None
 
 def pausar_descarga_aria2(gid):
     try: requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "pause", "method": "aria2.pause", "params": [gid]})
-    except: pass
+    except Exception as e:
+        logging.error(f"TraceID: {str(uuid.uuid4()).split('-')[0].upper()} | Fallo pause | Error: {str(e)}")
 
 def reanudar_descarga_aria2(gid):
     try: requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "unpause", "method": "aria2.unpause", "params": [gid]})
-    except: pass
+    except Exception as e:
+        logging.error(f"TraceID: {str(uuid.uuid4()).split('-')[0].upper()} | Fallo unpause | Error: {str(e)}")
 
 def cancelar_descarga_aria2(gid):
     try: requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "remove", "method": "aria2.remove", "params": [gid]})
-    except: pass
+    except Exception as e:
+        logging.error(f"TraceID: {str(uuid.uuid4()).split('-')[0].upper()} | Fallo remove | Error: {str(e)}")
