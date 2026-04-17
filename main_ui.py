@@ -4,9 +4,7 @@ import gi
 import os
 import hashlib
 import urllib.parse
-import json
-from schemas import RecursoImportacion
-from pydantic import ValidationError
+from core import GestorDescargasCore
 
 os.environ['no_proxy'] = 'localhost,127.0.0.1,::1'
 
@@ -79,9 +77,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         caja_input.append(btn_importar)
         caja_derecha.append(caja_input)
 
-        # El proxy se lee del SO en cada descarga via leer_proxy_sistema()
-        # No se expone ningún control manual al usuario
-
         self.store = Gio.ListStore(item_type=DescargaItem)
         self.filtro = Gtk.CustomFilter.new(match_func=self.logica_de_filtrado)
         self.filter_model = Gtk.FilterListModel(model=self.store, filter=self.filtro)
@@ -97,7 +92,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         scroll_tabla = Gtk.ScrolledWindow()
         scroll_tabla.set_child(self.tabla)
         scroll_tabla.set_vexpand(True)
-        caja_derecha.append(scroll_tabla)
+        caja_derecha.append(caja_derecha)
 
         caja_acciones = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         caja_acciones.set_margin_bottom(10)
@@ -136,6 +131,14 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.paned_principal.set_end_child(notebook)
 
         self.log("Sistema iniciado y listo para uso corporativo.")
+        
+        # --- NUEVO: Conectar UI con el Core ---
+        self.core = GestorDescargasCore(
+            log_callback=lambda msg: GLib.idle_add(self.log, msg),
+            ui_callback=lambda gid, nom, url, prox: GLib.idle_add(self.registrar_descarga_ui, gid, nom, url, prox)
+        )
+        # --------------------------------------
+        
         init_db() 
         self.log("🗄️ Base de datos local conectada.")
         self.sidebar.select_row(self.sidebar.get_row_at_index(0))
@@ -143,10 +146,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         GLib.timeout_add(1000, self.monitorizar_descargas)
 
     def leer_proxy_sistema(self):
-        """Lee el proxy del SO en el momento de la llamada.
-        Si GSettings está accesible, es la única fuente de verdad — su estado gana siempre,
-        incluso sobre variables de entorno del proceso. Las variables de entorno solo se usan
-        como fallback en entornos sin escritorio GNOME (servidores, CI, etc.)."""
         try:
             settings = Gio.Settings.new("org.gnome.system.proxy")
             mode = settings.get_string("mode")
@@ -167,28 +166,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                 or None
             )
 
-
-    
-
-
-    def procesar_json_importado(self, datos_json):
-        descargas_unicas = {}
-        for item in datos_json:
-            id_unico = item.get('id_recurso') or item['fuentes'][0]['url']
-            
-            if id_unico not in descargas_unicas:
-                descargas_unicas[id_unico] = item
-            else:
-                self.log(f"♻️ Duplicado omitido: {id_unico}")
-
-        for res_id, info in descargas_unicas.items():
-            urls = [f['url'] for f in info['fuentes']]
-            nombre = info.get('nombre', "archivo_descargado")
-            auth = info.get('auth')
-            
-            proxy = self.leer_proxy_sistema()
-            threading.Thread(target=self.tarea_background_multiple, args=(urls, nombre, proxy, auth)).start()
-
     def on_btn_importar_clicked(self, btn):
         dialog = Gtk.FileDialog(title="Seleccionar lista de descargas (JSON)")
         filtros = Gio.ListStore.new(Gtk.FileFilter)
@@ -197,127 +174,26 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         f.add_suffix("json")
         filtros.append(f)
         dialog.set_filters(filtros)
-
         dialog.open(self, None, self.al_seleccionar_archivo_json)
 
     def al_seleccionar_archivo_json(self, dialog, resultado):
         try:
             archivo = dialog.open_finish(resultado)
             if archivo:
-                import json
-                with open(archivo.get_path(), 'r') as f:
-                    datos = json.load(f)
-                
-                es_valido, mensaje_error = self.validar_estructura_json(datos)
-                if es_valido:
-                    self.log(f"✅ JSON validado correctamente. Procesando {len(datos)} elementos...")
-                    self.procesar_batch_json(datos)
-                else:
-                    self.log(f"❌ Error de formato en JSON: {mensaje_error}")
-                    
-        except Exception as e:
-            self.log(f"❌ Error crítico al leer JSON: {str(e)}")
-
-    def procesar_batch_json(self, datos):
-        procesados = set()
-        proxy_actual = self.leer_proxy_sistema()
-
-        for item in datos:
-            auth_grupo = item.get('auth')
-            
-            if "archivos" in item:
-                id_grupo = item.get("id_recurso", "grupo_desconocido")
-                nombre_grupo = item.get("nombre_grupo", id_grupo)
-                
-                if id_grupo in procesados:
-                    continue
-                procesados.add(id_grupo)
-                
-                self.log(f"📦 Detectado grupo: {nombre_grupo} ({len(item['archivos'])} partes)")
-                
-                for parte in item["archivos"]:
-                    urls = parte.get("fuentes", [])
-                    nombre_parte = parte.get("nombre", "parte_desconocida")
-                    
-                    auth_parte = parte.get('auth', auth_grupo) 
-                    
-                    if not urls:
-                        continue
-                        
-                    nombre_visual = f"[{nombre_grupo}] {nombre_parte}"
-                    
-                    threading.Thread(
-                        target=self.tarea_background_multiple, 
-                        args=(urls, nombre_visual, proxy_actual, auth_parte)
-                    ).start()
-                    
-            else:
-                id_unico = item.get('id_recurso') or item.get('nombre')
-                urls = item.get('fuentes', [])
-                
-                if not urls or id_unico in procesados:
-                    continue
-                procesados.add(id_unico)
-
-                nombre_archivo = item.get('nombre', f"descarga_{id_unico}")
-                
+                proxy_actual = self.leer_proxy_sistema()
+                # Delegamos TODO el trabajo al cerebro (core.py)
                 threading.Thread(
-                    target=self.tarea_background_multiple, 
-                    args=(urls, nombre_archivo, proxy_actual, auth_grupo)
+                    target=self.core.procesar_archivo_json, 
+                    args=(archivo.get_path(), proxy_actual)
                 ).start()
-
-    def al_seleccionar_archivo_json(self, dialog, resultado):
-        try:
-            archivo = dialog.open_finish(resultado)
-            if archivo:
-                with open(archivo.get_path(), 'r') as f:
-                    datos_crudos = json.load(f)
                 
-                if not isinstance(datos_crudos, list):
-                    self.log("❌ Error: El JSON debe contener una lista [].")
-                    return
-                
-                datos_validados = []
-                errores = 0
-                
-                # Pasamos cada elemento por el colador de Pydantic
-                for i, item in enumerate(datos_crudos):
-                    try:
-                        recurso_seguro = RecursoImportacion(**item)
-                        # by_alias=True es vital para que "pass" vuelva a ser "pass" y no "password"
-                        datos_validados.append(recurso_seguro.model_dump(by_alias=True, exclude_none=True))
-                    except ValidationError as e:
-                        errores += 1
-                        self.log(f"⚠️ Error de seguridad/formato en el elemento {i+1}. Ignorado.")
-                        print(f"Detalle Pydantic: {e}")
-                
-                if datos_validados:
-                    self.log(f"✅ JSON validado: {len(datos_validados)} elementos seguros ({errores} ignorados por fallos).")
-                    self.procesar_batch_json(datos_validados)
-                else:
-                    self.log("❌ Ningún elemento del JSON pasó el filtro de seguridad (Pydantic).")
-                    
         except Exception as e:
-            self.log(f"❌ Error crítico al leer JSON: {str(e)}")
-            
-
-    def tarea_background_multiple(self, urls, nombre, proxy, auth):
-        GLib.idle_add(self.log, f"Iniciando descarga múltiple: {nombre}")
-        respuesta = enviar_a_aria2(urls, nombre, proxy, auth)
-        gid = respuesta.get('result') if respuesta else None
-        
-        if gid:
-            GLib.idle_add(self.registrar_descarga_ui, gid, nombre, urls[0], proxy)
-        else:
-            error_msg = respuesta.get('error', {}).get('message', 'Fallo desconocido o de conexión') if respuesta else 'Fallo de red'
-            GLib.idle_add(self.log, f"❌ Aria2 rechazó el enlace '{nombre}': {error_msg}")
+            self.log(f"❌ Error al abrir archivo: {str(e)}")
 
     def registrar_descarga_ui(self, gid, nombre, url_ref, proxy):
         nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_ref, proxy)
         self.store.append(nuevo)
         self.filtro.changed(Gtk.FilterChange.DIFFERENT)
-
-
 
     def on_btn_descargar_clicked(self, widget=None):
         url = self.entrada_url.get_text().strip()
@@ -531,7 +407,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                                 item_ui.estado = f"❌ Error ({error_code})"
                                 item_ui.velocidad = "-"
                                 item_ui.progreso = "Fallido"
-                        
+                                
                                 threading.Thread(
                                     target=self.guardar_historial_background, 
                                     args=(item_ui.nombre, item_ui.url, item_ui.proxy, f"Error ({error_code})")
