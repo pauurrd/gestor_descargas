@@ -169,6 +169,12 @@ resource "aws_apigatewayv2_stage" "stage_1" {
   api_id      = aws_apigatewayv2_api.api_gateway_1.id
   name        = "$default"
   auto_deploy = true
+
+  # NUEVO: Rate Limiting (Escudo contra ataques)
+  default_route_settings {
+    throttling_burst_limit = 2
+    throttling_rate_limit  = 1
+  }
 }
 
 resource "aws_lambda_permission" "api_gw_1" {
@@ -201,6 +207,12 @@ resource "aws_apigatewayv2_stage" "stage_2" {
   api_id      = aws_apigatewayv2_api.api_gateway_2.id
   name        = "$default"
   auto_deploy = true
+
+  # NUEVO: Rate Limiting (Escudo contra ataques)
+  default_route_settings {
+    throttling_burst_limit = 2
+    throttling_rate_limit  = 1
+  }
 }
 
 resource "aws_lambda_permission" "api_gw_2" {
@@ -233,6 +245,12 @@ resource "aws_apigatewayv2_stage" "stage_3" {
   api_id      = aws_apigatewayv2_api.api_gateway_3.id
   name        = "$default"
   auto_deploy = true
+
+  # NUEVO: Rate Limiting (Escudo contra ataques)
+  default_route_settings {
+    throttling_burst_limit = 2
+    throttling_rate_limit  = 1
+  }
 }
 
 resource "aws_lambda_permission" "api_gw_3" {
