@@ -216,6 +216,8 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                     self.log(f"❌ Error de formato en JSON: {mensaje_error}")
                     
         except Exception as e:
+            if "Dismissed by user" in str(e):
+                return
             self.log(f"❌ Error crítico al leer JSON: {str(e)}")
 
     def procesar_batch_json(self, datos):
