@@ -1,7 +1,9 @@
+import os
 import sqlite3
 from datetime import datetime
 
-DB_NAME = "historial_descargas.db"
+HOME_DIR = os.path.expanduser("~")
+DB_NAME = os.path.join(HOME_DIR, ".gestor_descargas_historial.db")
 
 def init_db():
     """Crea la base de datos y la tabla si no existen."""
