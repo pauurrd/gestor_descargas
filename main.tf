@@ -229,6 +229,32 @@ resource "aws_apigatewayv2_api" "api_gateway_1" {
   protocol_type = "HTTP"
   target        = aws_lambda_function.auth_token_1.arn
 }
+
+resource "aws_apigatewayv2_integration" "int_1" {
+  api_id                 = aws_apigatewayv2_api.api_gateway_1.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.auth_token_1.invoke_arn
+  payload_format_version = "2.0"  # Garantiza event['headers'] como dict en la Lambda
+}
+
+resource "aws_apigatewayv2_route" "route_1" {
+  api_id    = aws_apigatewayv2_api.api_gateway_1.id
+  route_key = "$default"
+  target    = "integrations/${aws_apigatewayv2_integration.int_1.id}"
+}
+
+resource "aws_apigatewayv2_stage" "stage_1" {
+  api_id      = aws_apigatewayv2_api.api_gateway_1.id
+  name        = "$default"
+  auto_deploy = true
+
+  # NUEVO: Rate Limiting (Escudo contra ataques)
+  default_route_settings {
+    throttling_burst_limit = 2
+    throttling_rate_limit  = 1
+  }
+}
+
 resource "aws_lambda_permission" "api_gw_1" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.auth_token_1.arn
@@ -241,6 +267,32 @@ resource "aws_apigatewayv2_api" "api_gateway_2" {
   protocol_type = "HTTP"
   target        = aws_lambda_function.auth_basic_2.arn
 }
+
+resource "aws_apigatewayv2_integration" "int_2" {
+  api_id                 = aws_apigatewayv2_api.api_gateway_2.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.auth_basic_2.invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "route_2" {
+  api_id    = aws_apigatewayv2_api.api_gateway_2.id
+  route_key = "$default"
+  target    = "integrations/${aws_apigatewayv2_integration.int_2.id}"
+}
+
+resource "aws_apigatewayv2_stage" "stage_2" {
+  api_id      = aws_apigatewayv2_api.api_gateway_2.id
+  name        = "$default"
+  auto_deploy = true
+
+  # NUEVO: Rate Limiting (Escudo contra ataques)
+  default_route_settings {
+    throttling_burst_limit = 2
+    throttling_rate_limit  = 1
+  }
+}
+
 resource "aws_lambda_permission" "api_gw_2" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.auth_basic_2.arn
@@ -253,6 +305,32 @@ resource "aws_apigatewayv2_api" "api_gateway_3" {
   protocol_type = "HTTP"
   target        = aws_lambda_function.auth_token_3.arn
 }
+
+resource "aws_apigatewayv2_integration" "int_3" {
+  api_id                 = aws_apigatewayv2_api.api_gateway_3.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.auth_token_3.invoke_arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "route_3" {
+  api_id    = aws_apigatewayv2_api.api_gateway_3.id
+  route_key = "$default"
+  target    = "integrations/${aws_apigatewayv2_integration.int_3.id}"
+}
+
+resource "aws_apigatewayv2_stage" "stage_3" {
+  api_id      = aws_apigatewayv2_api.api_gateway_3.id
+  name        = "$default"
+  auto_deploy = true
+
+  # NUEVO: Rate Limiting (Escudo contra ataques)
+  default_route_settings {
+    throttling_burst_limit = 2
+    throttling_rate_limit  = 1
+  }
+}
+
 resource "aws_lambda_permission" "api_gw_3" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.auth_token_3.arn
