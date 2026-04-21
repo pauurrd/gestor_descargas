@@ -47,16 +47,25 @@ Utiliza una arquitectura dividida en tres capas: **GTK4/Libadwaita** para una in
 ### Puertos Expuestos (Docker)
 
 - **6800 (Aria2 RPC):** Puerto de control interno. Permite que la aplicación en Python envíe comandos de descarga y consulte el estado del progreso.
-- **8118 (Privoxy):** Puerto de intercepción segura. Permite a Python usar el túnel estanco de Docker para comunicarse con APIs externas.
 
+---
 
 ## Guía de Instalación para Nuevos Usuarios
 
 Esta sección está dirigida a usuarios finales o al departamento de IT que instale la aplicación por primera vez en una máquina con **Debian 13.2** (GNOME, 8 GB RAM, 4 CPUs).
 
 ### Paso 1 — Configurar el proxy en el SO (IT)
+Hay dos métodos de instalación. El **método recomendado** es mediante el paquete `.deb`, que automatiza todos los pasos. El método manual se mantiene como alternativa para entornos de desarrollo.
 
-**Este paso debe completarlo el departamento de IT antes de entregar la máquina al usuario**, o el propio usuario si tiene las credenciales del proxy.
+---
+
+### Método 1 — Instalación mediante paquete .deb (recomendado)
+
+Este es el método pensado para el cliente final. No requiere clonar el repositorio ni instalar dependencias manualmente.
+
+#### Paso 1 — Configurar el proxy corporativo (IT)
+
+**Este paso debe completarlo el departamento de IT antes de entregar la máquina al usuario.**
 
 1. Abre **Configuración del sistema** → **Red** → **Proxy de red**.
 2. Activa el proxy y selecciona **Manual**.
@@ -64,9 +73,34 @@ Esta sección está dirigida a usuarios finales o al departamento de IT que inst
 4. Cierra la configuración. Los cambios se aplican de inmediato, sin reiniciar la aplicación.
 
 
-### Paso 2 — Instalar dependencias del sistema
+#### Paso 2 — Instalar el paquete
 
-Abre una terminal y ejecuta:
+```bash
+sudo dpkg -i gestor-descargas_1.0.0_amd64_systemd.deb
+sudo apt-get install -f   # resuelve dependencias si falta alguna
+```
+
+El instalador se encarga automáticamente de instalar las dependencias de Python, levantar el motor de descargas y registrar la aplicación en el menú de GNOME.
+
+#### Paso 3 — Iniciar la aplicación
+
+Busca **Gestor de Descargas** en el menú de aplicaciones de GNOME, o desde terminal:
+
+```bash
+gestor-descargas
+```
+
+---
+
+### Método 2 — Instalación manual desde el repositorio (desarrollo)
+
+Este método está pensado para el equipo de desarrollo.
+
+#### Paso 1 — Configurar el proxy corporativo (IT)
+
+Igual que en el Método 1 — ver instrucciones arriba.
+
+#### Paso 2 — Instalar dependencias del sistema
 
 ```bash
 sudo apt update
@@ -78,22 +112,20 @@ sudo apt install -y \
     git
 ```
 
-### Paso 3 — Clonar el repositorio
+#### Paso 3 — Clonar el repositorio
 
 ```bash
 git clone https://github.com/pauurrd/gestor_descargas.git
 cd gestor_descargas
 ```
 
-### Paso 4 — Instalar dependencias de Python
+#### Paso 4 — Instalar dependencias de Python
 
 ```bash
 pip3 install yt-dlp requests --break-system-packages
 ```
 
-### Paso 5 — Añadir tu usuario al grupo Docker
-
-Para poder ejecutar Docker sin `sudo`:
+#### Paso 5 — Añadir tu usuario al grupo Docker
 
 ```bash
 sudo usermod -aG docker $USER
@@ -106,20 +138,72 @@ Cierra sesión y vuelve a entrar para que el cambio tenga efecto.
 La aplicación aplica una política de Confianza Cero. Se debe inyectar la IP del proxy corporativo directamente en el contenedor Docker en el momento de levantarlo.
 
 Desde la raíz del repositorio, inyecta tus variables de red corporativas:
+Cierra sesión y vuelve a entrar para que el cambio tenga efecto. Verifica con:
 
 ```bash
 PROXY_IP="IP_DEL_PROXY" PROXY_PORT="1080" docker-compose up -d --force-recreate
 ```
 
 (El contenedor tardará entre 30 y 60 segundos en instalar las dependencias internas y bloquear el firewall).
+#### Paso 6 — Levantar el motor de descargas
 
-### Paso 7 — Iniciar la aplicación
+```bash
+docker-compose up -d
+```
+
+Con `restart: unless-stopped` el contenedor arrancará automáticamente con el sistema en sucesivos reinicios. Verifica que está corriendo:
+
+```bash
+docker ps
+# Debe aparecer 'poc-aria2-backend' con estado 'Up'
+```
+
+#### Paso 7 — Iniciar la aplicación
 
 ```bash
 python3 main_ui.py
 ```
 
 La aplicación está lista para usarse.
+> **Nota para entornos VirtualBox:** GTK4 puede congelarse en un bucle infinito al intentar usar aceleración 3D con la tarjeta gráfica simulada, lanzando el error `MESA: error: Failed to attach to x11 shm`. Para evitarlo, fuerza el renderizado por software (CPU) arrancando la app así:
+> ```bash
+> GSK_RENDERER=cairo python3 main_ui.py
+> ```
+
+---
+
+## Generación del Paquete .deb (desarrolladores)
+
+El repositorio incluye dos scripts para generar el paquete `.deb` según el motor de descargas elegido. Ambos se ejecutan desde la raíz del repositorio y generan el instalador en `dist/`.
+
+### Generar el instalador
+
+aria2 se instala como binario nativo y corre como servicio del SO. No requiere Docker en la máquina del cliente.
+
+```bash
+chmod +x build_deb_systemd.sh
+./build_deb_systemd.sh
+# Genera: dist/gestor-descargas_1.0.0_amd64_systemd.deb
+```
+
+### Estructura de archivos de packaging
+
+```
+packaging/
+├── DEBIAN/
+│   ├── control              ← metadatos y dependencias del paquete
+│   ├── postinst             ← pip install + systemctl enable/start
+│   └── prerm                ← systemctl stop antes de desinstalar
+├── lib/systemd/system/
+│   └── aria2-rpc.service    ← unidad systemd de aria2
+└── usr/
+    ├── bin/
+    │   └── gestor-descargas      ← script lanzador
+    └── share/applications/
+        └── gestor-descargas.desktop ← entrada menú GNOME
+```
+
+---
 
 ## Uso Básico
 
@@ -138,9 +222,9 @@ Selecciona cualquier descarga de la lista para activar los botones de acción:
 * **Reintentar** — reintenta una descarga fallida con los mismos parámetros.
 * **Pausar / Reanudar** — pausa o reanuda una descarga activa.
 * **Cancelar** — cancela y elimina la tarea.
-* **Abrir Carpeta** — abre el explorador de archivos en la carpeta `./Descargas`.
+* **Abrir Carpeta** — abre el explorador de archivos en la carpeta de descargas.
 
-
+---
 
 ## Formato de Importación JSON
 
@@ -222,6 +306,8 @@ def resolver_url(url_usuario, proxy=None):
 ---
 
 ## Resolución de Problemas Frecuentes y Códigos de Error
+
+* **La app se congela al arrancar en VirtualBox** (`MESA: error: Failed to attach to x11 shm`): GTK4 intenta usar aceleración 3D con la tarjeta gráfica simulada de VirtualBox y falla. Solución: forzar renderizado por software con `GSK_RENDERER=cairo python3 main_ui.py`.
 
 * **Error "Aria2 rechazó el enlace" (❌ Rechazado):** El motor no pudo establecer la conexión inicial. Causas comunes: proxy del SO caído o inaccesible, o URL de S3 con firma caducada o región incorrecta.
 

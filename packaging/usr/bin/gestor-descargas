@@ -1,0 +1,4 @@
+#!/bin/bash
+# Lanzador del Gestor de Descargas Corporativo
+cd /usr/share/gestor-descargas
+exec python3 main_ui.py "$@"
