@@ -1,16 +1,16 @@
-# Gestor de Descargas Corporativo (GTK4 + Aria2)
+# Gestor de Descargas Corporativo (GTK4 + Aria2 + Zero Trust)
 
-Un gestor de descargas moderno, modular y nativo para Linux (GNOME) escrito en Python, diseñado específicamente para entornos empresariales y peticiones seguras.
+Un gestor de descargas moderno, modular y nativo para Linux (GNOME) escrito en Python, diseñado específicamente para entornos empresariales con requisitos de máxima seguridad y **Confianza Cero (Zero Trust)**.
 
-Utiliza una arquitectura dividida en tres capas: **GTK4/Libadwaita** para una interfaz nativa, un **Router Inteligente** en Python, y un motor **Aria2** corriendo de forma aislada en Docker.
+Utiliza una arquitectura dividida en tres capas: **GTK4/Libadwaita** para una interfaz nativa, un **Router Inteligente** en Python, y un motor **Aria2** corriendo dentro de un **Búnker de Red Docker** aislado perimetralmente.
 
 ## Características Principales
 
 * **Interfaz Nativa GNOME:** Construida con GTK4 y Libadwaita para integrarse con el ecosistema de Linux moderno.
 * **Descargas Multiparte Optimizadas:** Alimentado por `aria2`, soporta descargas HTTP/HTTPS y FTP dividiendo los archivos en múltiples conexiones simultáneas desde diferentes hosts.
-* **Enrutamiento Corporativo:** Detección automática del proxy del SO en cada descarga, leyendo directamente desde GNOME Settings. Cualquier cambio en la configuración de red del SO se aplica de forma inmediata sin reiniciar la aplicación.
-* **Importación por Lotes y Grupos (JSON):** Soporte para importar listas masivas de descargas simples o archivos divididos en partes lógicas. El sistema gestiona automáticamente múltiples fuentes (espejos) para un mismo archivo y omite descargas duplicadas.
-* **Autenticación Nativa:** Soporte integrado para inyectar credenciales (Basic Auth) o Tokens de acceso (Bearer Tokens) en descargas protegidas a través del archivo JSON. Cada parte de un mismo archivo puede autenticarse contra un host diferente.
+* **Arquitectura Zero Trust y Cero Fugas:** El tráfico es secuestrado por un cortafuegos estricto (`iptables`) a nivel de contenedor. Si el túnel seguro falla, la red se corta físicamente (`Kill-Switch`). Incorpora un servidor DNS interno (`dnsmasq`) para evitar fugas de resolución (`DNS Leaks`) y fuerza el enrutamiento socks5h a través de un proxy transparente (`Privoxy`).
+* **Importación por Lotes y Grupos (JSON):** Soporte para importar listas masivas de descargas simples o archivos divididos en partes lógicas. El sistema gestiona automáticamente múltiples fuentes (`espejos`) para un mismo archivo y omite descargas duplicadas.
+* **Autenticación Nativa:** Soporte integrado para inyectar credenciales (`Basic Auth`) o Tokens de acceso (`Bearer Tokens`) en descargas protegidas a través del archivo JSON. Cada parte de un mismo archivo puede autenticarse contra un host diferente. El router de Python intercepta proactivamente las redirecciones 302 típicas de las APIs corporativas, pasarelas de seguridad o URLs temporales, asegurando que el motor de descarga reciba el enlace puro final sin romper firmas criptográficas.
 * **Extractor Inteligente (Router):**
   * Filtro de extensiones empresariales clasificadas por tipología (`.zip`, `.pdf`, `.mp4`, `.iso`, etc.).
   * Soporte integrado para extraer vídeos corporativos usando `yt-dlp`.
@@ -18,34 +18,30 @@ Utiliza una arquitectura dividida en tres capas: **GTK4/Libadwaita** para una in
 ## Arquitectura del Sistema
 
 1. **La Interfaz (UI):** `main_ui.py` — Maneja la ventana GTK4, importación de JSON, validación de protocolos y los bucles de monitorización asíncrona.
-2. **Las Reglas (Backend):** `extractor.py` — Filtra URLs, extrae enlaces directos, estructura las peticiones de autenticación y gestiona la comunicación RPC con aria2.
-3. **La Lambda de autenticación:** `lambda_auth.py` — Valida la cabecera `X-My-App-Auth` y genera URLs presignadas de S3 con firma V4.
+2. **Las Reglas (Backend):** `extractor.py` —Estructura las peticiones, intercepta los redirects 302 de las pasarelas corporativas para proteger las firmas, y gestiona la comunicación RPC.
+3. **El Búnker (Docker):** Contenedor Alpine bloqueado a nivel de Kernel.
+4. **La Lambda de autenticación:** `lambda_auth.py` — Valida la cabecera `X-My-App-Auth` y genera URLs prefirmadas de S3 forzando el endpoint regional.
 
 ```text
-[ Interfaz GTK4 ] <---(JSON / RPC)---> [ Router Python / Extractor (yt-dlp) ]
-                                                    |
-                                         (Petición con X-My-App-Auth)
-                                                    v
-                                          [ Proxy del SO ]
-                                          /         |         \
-                                         v          v          v
-                               [ API Gateway 1 ] [ API Gateway 2 ] [ API Gateway 3 ]
-                               Bearer token 1    Basic auth        Bearer token 2
-                                         \          |          /
-                                          v         v         v
-                               [ Lambda 1 ]    [ Lambda 2 ]    [ Lambda 3 ]
-                               valida auth     valida auth     valida auth
-                               presigned URL   presigned URL   presigned URL
-                                         \          |          /
-                                          v         v         v
-                               [ S3 bucket_a ] [ S3 bucket_b ] [ S3 bucket_c ]
-                                  .7z.001         .7z.002         .7z.003
-                                          \          |          /
-                                           v         v         v
-  [ Contenedor Docker ]--------------------------------------------------
+[ Interfaz GTK4 ] <---(JSON / RPC)---> [ Router Python / Extractor ]
+                                            |
+                         (Intercepta 302 y extrae URL pura de S3)
+                                            |
+  [ Contenedor Docker (Búnker Zero Trust) ]------------------------------
   |                                                                     |
-  |  [ Aria2c ] <---- datos binarios en paralelo desde los 3 buckets   |
+  |  [ Aria2c ] ---> (Consulta DNS)  ---> [ dnsmasq (Fake DNS) ]        |
+  |             ---> (Petición HTTP) ---> [ Privoxy (Puerto 8118) ]     |
+  |                                                  |                  |
+  |  [ iptables (Kill-Switch) ] <---------------------                  |
+  |  (Bloquea TODO el tráfico excepto IP del Proxy)                     |
   -----------------------------------------------------------------------
+                                            |
+                                  (SOCKS5h Encriptado)
+                                            v
+                                  [ Dante Proxy SOCKS5 ]
+                                            |
+                                            v
+                           [ API Gateways / S3 (AWS Irlanda) ]
 ```
 
 ### Puertos Expuestos (Docker)
@@ -58,6 +54,7 @@ Utiliza una arquitectura dividida en tres capas: **GTK4/Libadwaita** para una in
 
 Esta sección está dirigida a usuarios finales o al departamento de IT que instale la aplicación por primera vez en una máquina con **Debian 13.2** (GNOME, 8 GB RAM, 4 CPUs).
 
+### Paso 1 — Configurar el proxy en el SO (IT)
 Hay dos métodos de instalación. El **método recomendado** es mediante el paquete `.deb`, que automatiza todos los pasos. El método manual se mantiene como alternativa para entornos de desarrollo.
 
 ---
@@ -70,14 +67,11 @@ Este es el método pensado para el cliente final. No requiere clonar el reposito
 
 **Este paso debe completarlo el departamento de IT antes de entregar la máquina al usuario.**
 
-La aplicación lee el proxy directamente desde GNOME Settings en cada descarga. No hay ningún campo en la interfaz para introducirlo — debe estar configurado a nivel de sistema operativo.
-
 1. Abre **Configuración del sistema** → **Red** → **Proxy de red**.
 2. Activa el proxy y selecciona **Manual**.
-3. En **Proxy HTTP**, introduce la dirección y puerto del proxy corporativo.
+3. En **SOCKS Host**, introduce la dirección y puerto del proxy corporativo.
 4. Cierra la configuración. Los cambios se aplican de inmediato, sin reiniciar la aplicación.
 
-> Si el proxy cambia en el futuro, basta con actualizar este valor en GNOME Settings. La aplicación lo detectará automáticamente en la siguiente descarga.
 
 #### Paso 2 — Instalar el paquete
 
@@ -137,12 +131,20 @@ pip3 install yt-dlp requests --break-system-packages
 sudo usermod -aG docker $USER
 ```
 
+Cierra sesión y vuelve a entrar para que el cambio tenga efecto.
+
+### Paso 6 — Levantar el Búnker de Descargas (IT)
+
+La aplicación aplica una política de Confianza Cero. Se debe inyectar la IP del proxy corporativo directamente en el contenedor Docker en el momento de levantarlo.
+
+Desde la raíz del repositorio, inyecta tus variables de red corporativas:
 Cierra sesión y vuelve a entrar para que el cambio tenga efecto. Verifica con:
 
 ```bash
-docker ps
+PROXY_IP="IP_DEL_PROXY" PROXY_PORT="1080" docker-compose up -d --force-recreate
 ```
 
+(El contenedor tardará entre 30 y 60 segundos en instalar las dependencias internas y bloquear el firewall).
 #### Paso 6 — Levantar el motor de descargas
 
 ```bash
@@ -162,6 +164,7 @@ docker ps
 python3 main_ui.py
 ```
 
+La aplicación está lista para usarse.
 > **Nota para entornos VirtualBox:** GTK4 puede congelarse en un bucle infinito al intentar usar aceleración 3D con la tarjeta gráfica simulada, lanzando el error `MESA: error: Failed to attach to x11 shm`. Para evitarlo, fuerza el renderizado por software (CPU) arrancando la app así:
 > ```bash
 > GSK_RENDERER=cairo python3 main_ui.py
@@ -206,7 +209,7 @@ packaging/
 
 ### Descarga por URL
 
-Pega una URL directa en el campo de texto superior y pulsa **Descargar** o la tecla `Enter`. La aplicación detectará automáticamente el tipo de archivo y lo enviará al motor de descarga.
+Pega una URL directa en el campo de texto superior y pulsa `Descargar`. El router delegará la petición al búnker.
 
 ### Importación por JSON
 
@@ -310,6 +313,8 @@ def resolver_url(url_usuario, proxy=None):
 
 * **Descargas congeladas en "Conectando...":** Ocurre en entornos corporativos al descargar desde la IP pública de la propia empresa a través del proxy interno (problema de "Hairpin NAT"). Solución: pedir al equipo de redes que habilite hairpinning o implemente Split DNS.
 
+* **Descargas congeladas en "0 KB/s" o "Fallo de red":** El Kill-Switch de iptables ha entrado en acción. Esto significa que el proxy corporativo (`PROXY_IP`) introducido en Docker está caído, o el puerto está cerrado. El sistema se ha bloqueado para evitar fugas de IP a internet abierto.
+
 * **❌ Error (Código 1) — Conexión abortada:** La conexión fue cortada por un intermediario. Causas: proxy corporativo (Zscaler, Squid) con el método `CONNECT` bloqueado, o política de tamaño máximo de archivo activa. Contactar con el administrador de red.
 
 * **❌ Error (Código 4) — Recurso no encontrado (HTTP 404):** La URL del API Gateway es correcta pero la ruta no existe. En la infraestructura de pruebas, asegurarse de que las rutas de los API Gateways están configuradas como `$default` y no como rutas específicas (`GET /download`).
@@ -319,7 +324,6 @@ def resolver_url(url_usuario, proxy=None):
   * **Doble redirect en S3:** Si la Lambda genera URLs presignadas sin `endpoint_url` explícito, boto3 usa el endpoint global de S3 y éste hace un redirect interno al endpoint regional. La firma queda ligada al host original y el segundo request devuelve 403. Solución: instanciar el cliente S3 con `endpoint_url='https://s3.eu-west-1.amazonaws.com'` (ajustar la región según corresponda).
   * **Proxy corporativo inyectando HTML:** Si el recurso es público pero sigue fallando, la seguridad perimetral puede estar bloqueando la URL e inyectando una página de advertencia HTML.
 
----
 
 ## ☁️ Entorno de Pruebas en AWS (Terraform)
 
@@ -327,9 +331,8 @@ Este repositorio incluye `main.tf` y `lambda_auth.py` para levantar automáticam
 
 ### Qué despliega
 
-* **EC2 con Squid Proxy** — enruta el tráfico saliente de aria2. El Security Group se configura dinámicamente con tu IP pública en el momento del `apply`.
-* **3 API Gateways HTTP** (uno por parte del archivo), cada uno con integración explícita `AWS_PROXY` y `payload_format_version = "2.0"` para garantizar que las cabeceras llegan a la Lambda como diccionario.
-* **3 Funciones Lambda** (`lambda_auth.py`) — validan la cabecera `X-My-App-Auth` contra la variable de entorno `EXPECTED_AUTH` y generan una URL presignada S3 con firma V4. Usan `endpoint_url` regional explícito para evitar el doble redirect que invalidaría la firma.
+* **EC2 con Dante Proxy** — Actúa como el túnel SOCKS5. Protegido por Security Group atado a tu IP pública actual.
+* **3 API Gateways HTTP y 3 Funciones Lambda** (`lambda_auth.py`) — Validan los tokens, interceptan autenticaciones y generan la firma V4 de S3, forzando la región para evitar corrupciones de firma 301/302.
 * **3 Buckets S3 privados** — cada uno contiene una parte del archivo de prueba (`.7z.001`, `.7z.002`, `.7z.003`).
 
 ### Autenticación por Gateway
