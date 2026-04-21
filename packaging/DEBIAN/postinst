@@ -1,0 +1,18 @@
+#!/bin/bash
+set -e
+
+echo "[gestor-descargas] Instalando dependencias Python..."
+pip3 install --break-system-packages yt-dlp requests
+
+echo "[gestor-descargas] Creando directorio de descargas..."
+mkdir -p /var/lib/gestor-descargas/Descargas
+chmod 777 /var/lib/gestor-descargas/Descargas
+
+echo "[gestor-descargas] Habilitando servicio aria2-rpc..."
+systemctl daemon-reload
+systemctl enable aria2-rpc.service
+systemctl start aria2-rpc.service
+
+echo "[gestor-descargas] Instalación completada."
+echo "  → Lanza la aplicación con: gestor-descargas"
+echo "  → O búscala en el menú de aplicaciones de GNOME."
