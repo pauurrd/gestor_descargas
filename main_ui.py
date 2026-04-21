@@ -79,9 +79,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         caja_input.append(btn_importar)
         caja_derecha.append(caja_input)
 
-        # El proxy se lee del SO en cada descarga via leer_proxy_sistema()
-        # No se expone ningún control manual al usuario
-
         self.store = Gio.ListStore(item_type=DescargaItem)
         self.filtro = Gtk.CustomFilter.new(match_func=self.logica_de_filtrado)
         self.filter_model = Gtk.FilterListModel(model=self.store, filter=self.filtro)
@@ -139,37 +136,8 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         init_db() 
         self.log("🗄️ Base de datos local conectada.")
         self.sidebar.select_row(self.sidebar.get_row_at_index(0))
-        self.log("⚙️ Proxy: se leerá del SO en cada descarga.")
+        self.log("🔒 Entorno seguro activado: Tráfico gestionado por cortafuegos (Docker).")
         GLib.timeout_add(1000, self.monitorizar_descargas)
-
-    def leer_proxy_sistema(self):
-        """Lee el proxy del SO en el momento de la llamada.
-        Si GSettings está accesible, es la única fuente de verdad — su estado gana siempre,
-        incluso sobre variables de entorno del proceso. Las variables de entorno solo se usan
-        como fallback en entornos sin escritorio GNOME (servidores, CI, etc.)."""
-        try:
-            settings = Gio.Settings.new("org.gnome.system.proxy")
-            mode = settings.get_string("mode")
-
-            if mode == "manual":
-                http_settings = Gio.Settings.new("org.gnome.system.proxy.http")
-                host = http_settings.get_string("host")
-                port = http_settings.get_int("port")
-                if host and port:
-                    return f"http://{host}:{port}"
-            return None
-
-        except Exception:
-            return (
-                os.environ.get('http_proxy')
-                or os.environ.get('https_proxy')
-                or os.environ.get('HTTP_PROXY')
-                or None
-            )
-
-
-    
-
 
     def procesar_json_importado(self, datos_json):
         descargas_unicas = {}
@@ -186,8 +154,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             nombre = info.get('nombre', "archivo_descargado")
             auth = info.get('auth')
             
-            proxy = self.leer_proxy_sistema()
-            threading.Thread(target=self.tarea_background_multiple, args=(urls, nombre, proxy, auth)).start()
+            threading.Thread(target=self.tarea_background_multiple, args=(urls, nombre, auth)).start()
 
     def on_btn_importar_clicked(self, btn):
         dialog = Gtk.FileDialog(title="Seleccionar lista de descargas (JSON)")
@@ -216,11 +183,12 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                     self.log(f"❌ Error de formato en JSON: {mensaje_error}")
                     
         except Exception as e:
+            if "Dismissed by user" in str(e):
+                return
             self.log(f"❌ Error crítico al leer JSON: {str(e)}")
 
     def procesar_batch_json(self, datos):
         procesados = set()
-        proxy_actual = self.leer_proxy_sistema()
 
         for item in datos:
             auth_grupo = item.get('auth')
@@ -248,7 +216,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                     
                     threading.Thread(
                         target=self.tarea_background_multiple, 
-                        args=(urls, nombre_visual, proxy_actual, auth_parte)
+                        args=(urls, nombre_visual, auth_parte)
                     ).start()
                     
             else:
@@ -263,7 +231,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                 
                 threading.Thread(
                     target=self.tarea_background_multiple, 
-                    args=(urls, nombre_archivo, proxy_actual, auth_grupo)
+                    args=(urls, nombre_archivo, auth_grupo)
                 ).start()
 
     def al_seleccionar_archivo_json(self, dialog, resultado):
@@ -301,23 +269,21 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             self.log(f"❌ Error crítico al leer JSON: {str(e)}")
             
 
-    def tarea_background_multiple(self, urls, nombre, proxy, auth):
+    def tarea_background_multiple(self, urls, nombre, auth=None):
         GLib.idle_add(self.log, f"Iniciando descarga múltiple: {nombre}")
-        respuesta = enviar_a_aria2(urls, nombre, proxy, auth)
+        respuesta = enviar_a_aria2(urls, nombre, auth)
         gid = respuesta.get('result') if respuesta else None
         
         if gid:
-            GLib.idle_add(self.registrar_descarga_ui, gid, nombre, urls[0], proxy)
+            GLib.idle_add(self.registrar_descarga_ui, gid, nombre, urls[0])
         else:
             error_msg = respuesta.get('error', {}).get('message', 'Fallo desconocido o de conexión') if respuesta else 'Fallo de red'
             GLib.idle_add(self.log, f"❌ Aria2 rechazó el enlace '{nombre}': {error_msg}")
 
-    def registrar_descarga_ui(self, gid, nombre, url_ref, proxy):
-        nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_ref, proxy)
+    def registrar_descarga_ui(self, gid, nombre, url_ref):
+        nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_ref, "Protegido por Docker")
         self.store.append(nuevo)
         self.filtro.changed(Gtk.FilterChange.DIFFERENT)
-
-
 
     def on_btn_descargar_clicked(self, widget=None):
         url = self.entrada_url.get_text().strip()
@@ -330,7 +296,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             return
 
         self.entrada_url.set_text("")
-        threading.Thread(target=self.tarea_background, args=(url, self.leer_proxy_sistema())).start()
+        threading.Thread(target=self.tarea_background, args=(url,)).start()
 
     def on_btn_reintentar_clicked(self, btn):
         item = self.selection_model.get_selected_item()
@@ -342,7 +308,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                 return
                 
             self.log(f"🔄 Reintentando descarga: {item.nombre}")
-            respuesta = enviar_a_aria2(item.url, item.nombre, item.proxy)
+            respuesta = enviar_a_aria2(item.url, item.nombre, None)
             nuevo_gid = respuesta.get('result', None) if respuesta else None
             
             if nuevo_gid:
@@ -355,7 +321,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             else:
                 self.log(f"❌ Fallo al intentar reiniciar {item.nombre} en aria2.")
 
-    def guardar_historial_background(self, nombre_json, url_origen, proxy, estado_final):
+    def guardar_historial_background(self, nombre_json, url_origen, estado_final):
         ruta_url = urllib.parse.urlparse(url_origen).path
         nombre_original = os.path.basename(ruta_url)
         if not nombre_original:
@@ -376,7 +342,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         else:
             hash_archivo = "No aplicable (Fallido)"
 
-        registrar_descarga(nombre_json, nombre_original, hash_archivo, url_origen, proxy, estado_final)
+        registrar_descarga(nombre_json, nombre_original, hash_archivo, url_origen, "Docker Firewall", estado_final)
 
     def on_btn_pausar_clicked(self, btn):
         item = self.selection_model.get_selected_item()
@@ -438,36 +404,36 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         columna = Gtk.ColumnViewColumn(title=titulo, factory=factory)
         self.tabla.append_column(columna)
 
-    def tarea_background(self, url, proxy):
+    def tarea_background(self, url):
         try:
-            url_real, nombre = resolver_url(url, proxy)
+            url_real, nombre = resolver_url(url, None)
             nombre_a_mostrar = nombre if nombre else url
-            GLib.idle_add(self.actualizar_ui_tras_busqueda, url_real, nombre_a_mostrar, proxy)
+            GLib.idle_add(self.actualizar_ui_tras_busqueda, url_real, nombre_a_mostrar)
         except Exception as e:
             GLib.idle_add(self.log, f"Error: {e}")
 
-    def actualizar_ui_tras_busqueda(self, url_real, nombre, proxy):
+    def actualizar_ui_tras_busqueda(self, url_real, nombre):
         if url_real:
             self.log(f"Enviando a aria2: {nombre}")
-            respuesta = enviar_a_aria2(url_real, nombre, proxy)
+            respuesta = enviar_a_aria2(url_real, nombre, None)
             gid = respuesta.get('result', None) if respuesta else None
             
             if gid:
-                nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_real, proxy)
+                nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_real, "Protegido por Docker")
                 self.store.append(nuevo)
                 self.filtro.changed(Gtk.FilterChange.DIFFERENT)
             else:
                 self.log(f"❌ Aria2 rechazó el enlace: {nombre}")
                 import random
                 fake_gid = f"error_aria2_{random.randint(1000, 9999)}"
-                nuevo_error = DescargaItem(fake_gid, nombre, "❌ Rechazado", "-", "Fallido", "-", url_real, proxy)
+                nuevo_error = DescargaItem(fake_gid, nombre, "❌ Rechazado", "-", "Fallido", "-", url_real, "Protegido por Docker")
                 self.store.append(nuevo_error)
                 self.filtro.changed(Gtk.FilterChange.DIFFERENT)
         else:
             self.log(f"⚠️ No se pudo obtener enlace válido de: {nombre}")
             import random
             fake_gid = f"error_{random.randint(1000, 9999)}"
-            nuevo_error = DescargaItem(fake_gid, nombre, "❌ Error (URL inválida)", "-", "Fallido", "-", "", proxy)
+            nuevo_error = DescargaItem(fake_gid, nombre, "❌ Error (URL inválida)", "-", "Fallido", "-", "", "Protegido por Docker")
             self.store.append(nuevo_error)
             self.filtro.changed(Gtk.FilterChange.DIFFERENT)
             
@@ -522,7 +488,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                             
                                 threading.Thread(
                                     target=self.guardar_historial_background, 
-                                    args=(item_ui.nombre, item_ui.url, item_ui.proxy, "Completado")
+                                    args=(item_ui.nombre, item_ui.url, "Completado")
                                 ).start()
                                 
                         elif estado_real == 'error':
@@ -534,7 +500,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                         
                                 threading.Thread(
                                     target=self.guardar_historial_background, 
-                                    args=(item_ui.nombre, item_ui.url, item_ui.proxy, f"Error ({error_code})")
+                                    args=(item_ui.nombre, item_ui.url, f"Error ({error_code})")
                                 ).start()
                         
                         elif estado_real == 'removed':
