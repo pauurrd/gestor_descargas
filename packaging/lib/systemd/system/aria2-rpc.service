@@ -1,0 +1,21 @@
+[Unit]
+Description=Aria2 RPC Backend - Gestor de Descargas Corporativo
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/aria2c \
+    --enable-rpc \
+    --rpc-listen-all=true \
+    --rpc-allow-origin-all \
+    --rpc-listen-port=6800 \
+    --dir=/var/lib/gestor-descargas/Descargas \
+    --max-connection-per-server=4 \
+    --split=4 \
+    --min-split-size=1M \
+    --no-conf
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

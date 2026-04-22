@@ -75,11 +75,47 @@ def resolver_url(url_usuario, proxy=None):
     print("[*] Enlace genérico/vídeo detectado. Delegando a yt-dlp...")
     return extraer_enlace_real(url_usuario, proxy)
 
-def enviar_a_aria2(lista_urls, nombre_archivo, proxy=None, auth=None):
+def enviar_a_aria2(lista_urls, nombre_archivo, auth=None):
     rpc_url = "http://localhost:6800/jsonrpc"
     
     if isinstance(lista_urls, str):
         lista_urls = [lista_urls]
+
+    urls_definitivas = []
+    
+    for url in lista_urls:
+        if "execute-api.eu-west-1.amazonaws.com" in url:
+            print(f"[*] Interceptando URL de AWS: {url}")
+            headers = {}
+            if auth:
+                tipo = auth.get('tipo', '').lower()
+                if tipo == 'basic':
+                    user = auth.get('user')
+                    passwd = auth.get('pass')
+                    credenciales = base64.b64encode(f"{user}:{passwd}".encode('utf-8')).decode('utf-8')
+                    headers["X-My-App-Auth"] = f"Basic {credenciales}"
+                elif tipo == 'token':
+                    headers["X-My-App-Auth"] = f"Bearer {auth.get('token')}"
+            
+            try:
+                proxies = {
+                    "http": "http://127.0.0.1:8118",
+                    "https": "http://127.0.0.1:8118"
+                }
+                respuesta_api = requests.get(url, headers=headers, proxies=proxies, allow_redirects=False)
+                
+                if respuesta_api.status_code == 302:
+                    url_s3_pura = respuesta_api.headers.get('Location')
+                    urls_definitivas.append(url_s3_pura)
+                    print("[*] URL prefirmada de S3 obtenida con éxito.")
+                else:
+                    print(f"[-] Fallo en API Gateway. Status: {respuesta_api.status_code}")
+                    return None
+            except Exception as e:
+                print(f"[-] Error al interceptar API: {e}")
+                return None
+        else:
+            urls_definitivas.append(url)
 
     opciones = {
         "out": nombre_archivo,
@@ -93,38 +129,22 @@ def enviar_a_aria2(lista_urls, nombre_archivo, proxy=None, auth=None):
         "retry-wait": "10",
         "continue": "true",
         "always-resume": "true",
-        "max-file-not-found": "10"
+        "max-file-not-found": "10",
+        "disable-ipv6": "true" 
     }
-
-    if proxy:
-        print(f"[*] 🛡️ Enrutando descarga a través del proxy: {proxy}")
-        opciones["all-proxy"] = proxy
-        opciones["disable-ipv6"] = "true"
-    else:
-        print("[*] ⚠️ ADVERTENCIA: Usando conexión directa (Sin Proxy)")
-    
-    if auth:
-        tipo = auth.get('tipo', '').lower()
-        if tipo == 'basic':
-            user = auth.get('user')
-            passwd = auth.get('pass')
-            credenciales = base64.b64encode(f"{user}:{passwd}".encode('utf-8')).decode('utf-8')
-            opciones["header"] = [f"X-My-App-Auth: Basic {credenciales}"]
-        elif tipo == 'token':
-            opciones["header"] = [f"X-My-App-Auth: Bearer {auth.get('token')}"]
-    
+        
     payload = {
         "jsonrpc": "2.0",
         "id": "batch_import",
         "method": "aria2.addUri",
-        "params": [lista_urls, opciones]
+        "params": [urls_definitivas, opciones]
     }
     
     try:
         respuesta = requests.post(rpc_url, json=payload)
         return respuesta.json()
     except Exception as e:
-        print(f"[-] Error en batch: {e}")
+        print(f"[-] Error enviando a Aria2: {e}")
         return None
 
 def obtener_estado_aria2():

@@ -20,3 +20,4 @@ venv/
 env/
 pruebas/
 *mock*.json
+.vscode/
