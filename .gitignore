@@ -14,4 +14,10 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 *tfplan*
+.env
+*.env
+venv/
+env/
+pruebas/
+*mock*.json
 .vscode/
