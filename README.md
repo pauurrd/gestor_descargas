@@ -1,80 +1,125 @@
-# Gestor de Descargas Corporativo (GTK4 + Aria2 + Tor)
+# Gestor de Descargas Corporativo (GTK4 + Aria2 + Zero Trust)
 
-Un gestor de descargas moderno, modular y nativo para Linux (GNOME) escrito en Python, diseñado específicamente para entornos empresariales y peticiones seguras.
+Un gestor de descargas moderno, modular y nativo para Linux (GNOME) escrito en Python, diseñado específicamente para entornos empresariales con requisitos de máxima seguridad y **Confianza Cero (Zero Trust)**.
 
-Utiliza una arquitectura dividida en tres capas: **GTK4/Libadwaita** para una interfaz nativa, un **Router Inteligente** en Python, y un motor **Aria2** corriendo de forma aislada en Docker junto a **Tor** y **Privoxy** para maximizar el ancho de banda y enrutar el tráfico de forma segura y anónima.
+Utiliza una arquitectura dividida en tres capas: **GTK4/Libadwaita** para una interfaz nativa, un **Router Inteligente** en Python, y un motor **Aria2** corriendo dentro de un **Búnker de Red Docker** aislado perimetralmente.
 
 ## Características Principales
 
-* **Interfaz Nativa GNOME:** Construida con GTK4 y Libadwaita para integrarse perfectamente con el ecosistema de Linux moderno.
-* **Descargas Multiparte Optimizadas:** Alimentado por `aria2`, soporta descargas HTTP/HTTPS y FTP ultrarrápidas dividiendo los archivos en múltiples conexiones simultáneas desde diferentes hosts.
-* **Enrutamiento Corporativo Avanzado:**
-  * Detección automática del proxy del SO (GNOME Settings o variables de entorno).
-  * Opción manual y segura para "Forzar Descarga Directa" (ignorar proxy).
-* **Red Tor Integrada:** Opción en las configuraciones avanzadas para enrutar todo el tráfico de descarga a través de la red Tor de forma transparente.
-* **Importación por Lotes y Grupos (JSON):** Soporte para importar listas masivas de descargas simples o archivos divididos en partes lógicas. El sistema gestiona automáticamente múltiples fuentes (espejos) para un mismo archivo y omite descargas duplicadas.
-* **Autenticación Nativa:** Soporte integrado para inyectar credenciales (Basic Auth) o Tokens de acceso (Bearer Tokens) en descargas protegidas a través del archivo JSON. Cada parte de un mismo archivo puede autenticarse contra un host diferente.
+* **Interfaz Nativa GNOME:** Construida con GTK4 y Libadwaita para integrarse con el ecosistema de Linux moderno.
+* **Descargas Multiparte Optimizadas:** Alimentado por `aria2`, soporta descargas HTTP/HTTPS y FTP dividiendo los archivos en múltiples conexiones simultáneas desde diferentes hosts.
+* **Arquitectura Zero Trust y Cero Fugas:** El tráfico es secuestrado por un cortafuegos estricto (`iptables`) a nivel de contenedor. Si el túnel seguro falla, la red se corta físicamente (`Kill-Switch`). Incorpora un servidor DNS interno (`dnsmasq`) para evitar fugas de resolución (`DNS Leaks`) y fuerza el enrutamiento socks5h a través de un proxy transparente (`Privoxy`).
+* **Importación por Lotes y Grupos (JSON):** Soporte para importar listas masivas de descargas simples o archivos divididos en partes lógicas. El sistema gestiona automáticamente múltiples fuentes (`espejos`) para un mismo archivo y omite descargas duplicadas.
+* **Autenticación Nativa:** Soporte integrado para inyectar credenciales (`Basic Auth`) o Tokens de acceso (`Bearer Tokens`) en descargas protegidas a través del archivo JSON. Cada parte de un mismo archivo puede autenticarse contra un host diferente. El router de Python intercepta proactivamente las redirecciones 302 típicas de las APIs corporativas, pasarelas de seguridad o URLs temporales, asegurando que el motor de descarga reciba el enlace puro final sin romper firmas criptográficas.
 * **Extractor Inteligente (Router):**
   * Filtro de extensiones empresariales clasificadas por tipología (`.zip`, `.pdf`, `.mp4`, `.iso`, etc.).
   * Soporte integrado para extraer vídeos corporativos usando `yt-dlp`.
 
 ## Arquitectura del Sistema
 
-El proyecto se compone de piezas fundamentales que se comunican entre sí aislando la lógica de la red. A continuación se muestra el flujo de la información:
-
 1. **La Interfaz (UI):** `main_ui.py` — Maneja la ventana GTK4, importación de JSON, validación de protocolos y los bucles de monitorización asíncrona.
-2. **Las Reglas (Backend):** `extractor.py` — Filtra URLs, extrae enlaces directos, estructura las peticiones de autenticación y gestiona la comunicación RPC con aria2.
-3. **La Lambda de autenticación:** `lambda_auth.py` — Valida la cabecera `X-My-App-Auth` y genera URLs presignadas de S3 con firma V4.
+2. **Las Reglas (Backend):** `extractor.py` —Estructura las peticiones, intercepta los redirects 302 de las pasarelas corporativas para proteger las firmas, y gestiona la comunicación RPC.
+3. **El Búnker (Docker):** Contenedor Alpine bloqueado a nivel de Kernel.
+4. **La Lambda de autenticación:** `lambda_auth.py` — Valida la cabecera `X-My-App-Auth` y genera URLs prefirmadas de S3 forzando el endpoint regional.
 
 ```text
-[ Interfaz GTK4 ] <---(JSON / RPC)---> [ Router Python / Extractor (yt-dlp) ]
-                                                    |
-                                         (Petición con X-My-App-Auth)
-                                                    v
-                                          [ Proxy Squid (EC2) ]
-                                          /         |         \
-                                         v          v          v
-                               [ API Gateway 1 ] [ API Gateway 2 ] [ API Gateway 3 ]
-                               Bearer token 1    Basic auth        Bearer token 2
-                                         \          |          /
-                                          v         v         v
-                               [ Lambda 1 ]    [ Lambda 2 ]    [ Lambda 3 ]
-                               valida auth     valida auth     valida auth
-                               presigned URL   presigned URL   presigned URL
-                                         \          |          /
-                                          v         v         v
-                               [ S3 bucket_a ] [ S3 bucket_b ] [ S3 bucket_c ]
-                                  .7z.001         .7z.002         .7z.003
-                                          \          |          /
-                                           v         v         v
-  [ Contenedor Docker (Red Aislada) ]------------------------------------------
-  |                                                                            |
-  |  [ Aria2c ] <---- datos binarios en paralelo desde los 3 buckets           |
-  |      |                                                                     |
-  |      +-------------> [ Privoxy ] ---> [ Tor SOCKS5 ] ---> (Red Onion)      |
-  -----------------------------------------------------------------------------
+[ Interfaz GTK4 ] <---(JSON / RPC)---> [ Router Python / Extractor ]
+                                            |
+                         (Intercepta 302 y extrae URL pura de S3)
+                                            |
+  [ Contenedor Docker (Búnker Zero Trust) ]------------------------------
+  |                                                                     |
+  |  [ Aria2c ] ---> (Consulta DNS)  ---> [ dnsmasq (Fake DNS) ]        |
+  |             ---> (Petición HTTP) ---> [ Privoxy (Puerto 8118) ]     |
+  |                                                  |                  |
+  |  [ iptables (Kill-Switch) ] <---------------------                  |
+  |  (Bloquea TODO el tráfico excepto IP del Proxy)                     |
+  -----------------------------------------------------------------------
+                                            |
+                                  (SOCKS5h Encriptado)
+                                            v
+                                  [ Dante Proxy SOCKS5 ]
+                                            |
+                                            v
+                           [ API Gateways / S3 (AWS Irlanda) ]
 ```
 
 ### Puertos Expuestos (Docker)
 
-El contenedor de red expone 3 puertos esenciales para el funcionamiento del sistema:
+- **6800 (Aria2 RPC):** Puerto de control interno. Permite que la aplicación en Python envíe comandos de descarga y consulte el estado del progreso.
 
-- **6800 (Aria2 RPC):** Puerto de control interno. Permite que la aplicación en Python envíe comandos de descarga y consulte el estado del progreso sin interactuar directamente con la consola.
-- **8118 (Privoxy HTTP):** Traductor local. Aria2 no habla el protocolo nativo de Tor, por lo que envía sus peticiones HTTP a este puerto, y Privoxy se encarga de empaquetarlas hacia Tor.
-- **9050 (Tor SOCKS5):** Puerto nativo de la red Tor. Se expone por si el usuario necesita enrutar el tráfico a través de la red Onion.
+---
 
-## Requisitos Previos
+## Guía de Instalación para Nuevos Usuarios
 
-Asegúrate de tener un entorno **Debian/Ubuntu** con Docker instalado.
+Esta sección está dirigida a usuarios finales o al departamento de IT que instale la aplicación por primera vez en una máquina con **Debian 13.2** (GNOME, 8 GB RAM, 4 CPUs).
 
-### 1. Dependencias del Sistema (Linux)
+### Paso 1 — Configurar el proxy en el SO (IT)
+Hay dos métodos de instalación. El **método recomendado** es mediante el paquete `.deb`, que automatiza todos los pasos. El método manual se mantiene como alternativa para entornos de desarrollo.
+
+---
+
+### Método 1 — Instalación mediante paquete .deb (recomendado)
+
+Este es el método pensado para el cliente final. No requiere clonar el repositorio ni instalar dependencias manualmente.
+
+#### Paso 1 — Configurar el proxy corporativo (IT)
+
+**Este paso debe completarlo el departamento de IT antes de entregar la máquina al usuario.**
+
+1. Abre **Configuración del sistema** → **Red** → **Proxy de red**.
+2. Activa el proxy y selecciona **Manual**.
+3. En **SOCKS Host**, introduce la dirección y puerto del proxy corporativo.
+4. Cierra la configuración. Los cambios se aplican de inmediato, sin reiniciar la aplicación.
+
+
+#### Paso 2 — Instalar el paquete
+
+```bash
+sudo dpkg -i gestor-descargas_1.0.0_amd64_systemd.deb
+sudo apt-get install -f   # resuelve dependencias si falta alguna
+```
+
+El instalador se encarga automáticamente de instalar las dependencias de Python, levantar el motor de descargas y registrar la aplicación en el menú de GNOME.
+
+#### Paso 3 — Iniciar la aplicación
+
+Busca **Gestor de Descargas** en el menú de aplicaciones de GNOME, o desde terminal:
+
+```bash
+gestor-descargas
+```
+
+---
+
+### Método 2 — Instalación manual desde el repositorio (desarrollo)
+
+Este método está pensado para el equipo de desarrollo.
+
+#### Paso 1 — Configurar el proxy corporativo (IT)
+
+Igual que en el Método 1 — ver instrucciones arriba.
+
+#### Paso 2 — Instalar dependencias del sistema
 
 ```bash
 sudo apt update
-sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 python3-pip docker.io docker-compose
+sudo apt install -y \
+    python3-gi python3-gi-cairo \
+    gir1.2-gtk-4.0 gir1.2-adw-1 \
+    python3-pip \
+    docker.io docker-compose \
+    git
 ```
 
-### 2. Dependencias de Python
+#### Paso 3 — Clonar el repositorio
+
+```bash
+git clone https://github.com/pauurrd/gestor_descargas.git
+cd gestor_descargas
+```
+
+#### Paso 4 — Instalar dependencias de Python
 
 Se recomienda encarecidamente utilizar un entorno virtual para no interferir con los paquetes del sistema:
 
@@ -88,29 +133,110 @@ pip install yt-dlp requests
 ### 🛡️ Seguridad (Pre-commit)
 Para evitar subir credenciales por error, es obligatorio activar el escáner local antes de hacer commits:
 `pip3 install pre-commit && pre-commit install`
+#### Paso 5 — Añadir tu usuario al grupo Docker
 
-## Instalación y Uso
+```bash
+sudo usermod -aG docker $USER
+```
 
-### 1. Levantar el motor (Docker)
+Cierra sesión y vuelve a entrar para que el cambio tenga efecto.
 
-Antes de abrir la aplicación, asegúrate de levantar la infraestructura de red:
+### Paso 6 — Levantar el Búnker de Descargas (IT)
+
+La aplicación aplica una política de Confianza Cero. Se debe inyectar la IP del proxy corporativo directamente en el contenedor Docker en el momento de levantarlo.
+
+Desde la raíz del repositorio, inyecta tus variables de red corporativas:
+Cierra sesión y vuelve a entrar para que el cambio tenga efecto. Verifica con:
+
+```bash
+PROXY_IP="IP_DEL_PROXY" PROXY_PORT="1080" docker-compose up -d --force-recreate
+```
+
+(El contenedor tardará entre 30 y 60 segundos en instalar las dependencias internas y bloquear el firewall).
+#### Paso 6 — Levantar el motor de descargas
 
 ```bash
 docker-compose up -d
 ```
 
-Las descargas se guardarán automáticamente en la carpeta local `./Descargas`.
+Con `restart: unless-stopped` el contenedor arrancará automáticamente con el sistema en sucesivos reinicios. Verifica que está corriendo:
 
-### 2. Iniciar la Aplicación
+```bash
+docker ps
+# Debe aparecer 'poc-aria2-backend' con estado 'Up'
+```
+
+#### Paso 7 — Iniciar la aplicación
 
 ```bash
 python3 main_ui.py
 ```
 
+La aplicación está lista para usarse.
+> **Nota para entornos VirtualBox:** GTK4 puede congelarse en un bucle infinito al intentar usar aceleración 3D con la tarjeta gráfica simulada, lanzando el error `MESA: error: Failed to attach to x11 shm`. Para evitarlo, fuerza el renderizado por software (CPU) arrancando la app así:
+> ```bash
+> GSK_RENDERER=cairo python3 main_ui.py
+> ```
+
+---
+
+## Generación del Paquete .deb (desarrolladores)
+
+El repositorio incluye dos scripts para generar el paquete `.deb` según el motor de descargas elegido. Ambos se ejecutan desde la raíz del repositorio y generan el instalador en `dist/`.
+
+### Generar el instalador
+
+aria2 se instala como binario nativo y corre como servicio del SO. No requiere Docker en la máquina del cliente.
+
+```bash
+chmod +x build_deb_systemd.sh
+./build_deb_systemd.sh
+# Genera: dist/gestor-descargas_1.0.0_amd64_systemd.deb
+```
+
+### Estructura de archivos de packaging
+
+```
+packaging/
+├── DEBIAN/
+│   ├── control              ← metadatos y dependencias del paquete
+│   ├── postinst             ← pip install + systemctl enable/start
+│   └── prerm                ← systemctl stop antes de desinstalar
+├── lib/systemd/system/
+│   └── aria2-rpc.service    ← unidad systemd de aria2
+└── usr/
+    ├── bin/
+    │   └── gestor-descargas      ← script lanzador
+    └── share/applications/
+        └── gestor-descargas.desktop ← entrada menú GNOME
+```
+
+---
+
+## Uso Básico
+
+### Descarga por URL
+
+Pega una URL directa en el campo de texto superior y pulsa `Descargar`. El router delegará la petición al búnker.
+
+### Importación por JSON
+
+Para descargar múltiples archivos o grupos de partes de un mismo fichero, pulsa **Importar JSON** y selecciona un archivo con el formato descrito más abajo. Es el método recomendado para descargas corporativas con autenticación.
+
+### Panel de control
+
+Selecciona cualquier descarga de la lista para activar los botones de acción:
+
+* **Reintentar** — reintenta una descarga fallida con los mismos parámetros.
+* **Pausar / Reanudar** — pausa o reanuda una descarga activa.
+* **Cancelar** — cancela y elimina la tarea.
+* **Abrir Carpeta** — abre el explorador de archivos en la carpeta de descargas.
+
+---
 
 ## Formato de Importación JSON
 
-El sistema permite importar listas de descargas utilizando un formato estructurado. Soporta tanto descargas simples como agrupaciones lógicas de archivos (por ejemplo, partes de un mismo backup alojadas en distintos servidores con autenticación diferente por parte).
+Soporta descargas simples, espejos (múltiples fuentes para el mismo archivo) y grupos de partes con autenticación diferente por parte.
 
 ```json
 [
@@ -154,16 +280,20 @@ El sistema permite importar listas de descargas utilizando un formato estructura
 ]
 ```
 
+---
+
 ## Historial de Descargas
 
-Cada vez que finaliza o falla una descarga, el sistema guarda un registro en el archivo local `historial_descargas.db`. Para visualizarlo:
+Cada vez que finaliza o falla una descarga, el sistema guarda un registro en `historial_descargas.db`. Para visualizarlo:
 
 ```bash
 sudo apt install sqlitebrowser
 sqlitebrowser historial_descargas.db
 ```
 
-En la pestaña **Browse Data** verás información de auditoría: fecha y hora, nombre del archivo, hash SHA-256, URL de origen y proxy usado.
+En la pestaña **Browse Data** verás: fecha y hora, nombre del archivo, hash SHA-256, URL de origen y proxy usado.
+
+---
 
 ## Cómo Añadir Nuevas Páginas Web (Provider Rules)
 
@@ -181,11 +311,17 @@ def resolver_url(url_usuario, proxy=None):
     es_directo, nombre_archivo = es_enlace_directo(url_usuario)
 ```
 
+---
+
 ## Resolución de Problemas Frecuentes y Códigos de Error
 
-* **Error "Aria2 rechazó el enlace" (❌ Rechazado):** El motor no pudo establecer la conexión inicial. Causas comunes: proxy caído o mal configurado, protocolo incorrecto (`socks5://` contra un puerto HTTP), o URL de S3 con firma caducada o región incorrecta.
+* **La app se congela al arrancar en VirtualBox** (`MESA: error: Failed to attach to x11 shm`): GTK4 intenta usar aceleración 3D con la tarjeta gráfica simulada de VirtualBox y falla. Solución: forzar renderizado por software con `GSK_RENDERER=cairo python3 main_ui.py`.
+
+* **Error "Aria2 rechazó el enlace" (❌ Rechazado):** El motor no pudo establecer la conexión inicial. Causas comunes: proxy del SO caído o inaccesible, o URL de S3 con firma caducada o región incorrecta.
 
 * **Descargas congeladas en "Conectando...":** Ocurre en entornos corporativos al descargar desde la IP pública de la propia empresa a través del proxy interno (problema de "Hairpin NAT"). Solución: pedir al equipo de redes que habilite hairpinning o implemente Split DNS.
+
+* **Descargas congeladas en "0 KB/s" o "Fallo de red":** El Kill-Switch de iptables ha entrado en acción. Esto significa que el proxy corporativo (`PROXY_IP`) introducido en Docker está caído, o el puerto está cerrado. El sistema se ha bloqueado para evitar fugas de IP a internet abierto.
 
 * **❌ Error (Código 1) — Conexión abortada:** La conexión fue cortada por un intermediario. Causas: proxy corporativo (Zscaler, Squid) con el método `CONNECT` bloqueado, o política de tamaño máximo de archivo activa. Contactar con el administrador de red.
 
@@ -196,15 +332,15 @@ def resolver_url(url_usuario, proxy=None):
   * **Doble redirect en S3:** Si la Lambda genera URLs presignadas sin `endpoint_url` explícito, boto3 usa el endpoint global de S3 y éste hace un redirect interno al endpoint regional. La firma queda ligada al host original y el segundo request devuelve 403. Solución: instanciar el cliente S3 con `endpoint_url='https://s3.eu-west-1.amazonaws.com'` (ajustar la región según corresponda).
   * **Proxy corporativo inyectando HTML:** Si el recurso es público pero sigue fallando, la seguridad perimetral puede estar bloqueando la URL e inyectando una página de advertencia HTML.
 
+
 ## ☁️ Entorno de Pruebas en AWS (Terraform)
 
 Este repositorio incluye `main.tf` y `lambda_auth.py` para levantar automáticamente una infraestructura de pruebas en AWS que valida el flujo completo de descarga multi-host con autenticación diferente por parte.
 
 ### Qué despliega
 
-* **EC2 con Squid Proxy** — enruta el tráfico saliente de aria2. El Security Group se configura dinámicamente con tu IP pública en el momento del `apply`.
-* **3 API Gateways HTTP** (uno por parte del archivo), cada uno con integración explícita `AWS_PROXY` y `payload_format_version = "2.0"` para garantizar que las cabeceras llegan a la Lambda como diccionario.
-* **3 Funciones Lambda** (`lambda_auth.py`) — validan la cabecera `X-My-App-Auth` contra la variable de entorno `EXPECTED_AUTH` y generan una URL presignada S3 con firma V4. Usan `endpoint_url` regional explícito para evitar el doble redirect que invalidaría la firma.
+* **EC2 con Dante Proxy** — Actúa como el túnel SOCKS5. Protegido por Security Group atado a tu IP pública actual.
+* **3 API Gateways HTTP y 3 Funciones Lambda** (`lambda_auth.py`) — Validan los tokens, interceptan autenticaciones y generan la firma V4 de S3, forzando la región para evitar corrupciones de firma 301/302.
 * **3 Buckets S3 privados** — cada uno contiene una parte del archivo de prueba (`.7z.001`, `.7z.002`, `.7z.003`).
 
 ### Autenticación por Gateway
@@ -217,15 +353,11 @@ Este repositorio incluye `main.tf` y `lambda_auth.py` para levantar automáticam
 
 ### Preparar el archivo de prueba
 
-El archivo de prueba debe dividirse en partes con 7-Zip antes del `terraform apply`. En Linux:
+En Linux:
 
 ```bash
-# Descargar una ISO de prueba
 wget https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.5.0-amd64-netinst.iso
-
-# Dividir en partes de 300 MB
 7z a -v300m debian-split.7z debian-12.5.0-amd64-netinst.iso
-# Genera: debian-split.7z.001, debian-split.7z.002, debian-split.7z.003 ...
 ```
 
 En Windows con 7-Zip: botón derecho sobre el archivo → *Añadir al archivo* → en "Dividir en volúmenes de" escribir `300m`.
@@ -243,12 +375,11 @@ Al terminar, el output mostrará la IP del proxy y las URLs de los tres API Gate
 
 ### Ensamblado tras la descarga
 
-Una vez descargadas las tres partes:
-
 ```bash
 7z x debian-13.2.0-amd64-netinst.7z.001
-# 7-Zip detecta automáticamente las partes .001, .002, .003 y reconstruye el archivo original
 ```
+
+7-Zip detecta automáticamente las partes `.001`, `.002`, `.003` y reconstruye el archivo original.
 
 ### Limpieza
 

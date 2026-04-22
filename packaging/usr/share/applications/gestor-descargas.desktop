@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Gestor de Descargas
+Comment=Gestor de descargas corporativo con soporte de autenticación y proxy
+Exec=gestor-descargas
+Icon=gestor-descargas
+Terminal=false
+Categories=Network;FileTransfer;
+Keywords=descargas;aria2;corporativo;proxy;
