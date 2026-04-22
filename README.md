@@ -121,10 +121,18 @@ cd gestor_descargas
 
 #### Paso 4 — Instalar dependencias de Python
 
+Se recomienda encarecidamente utilizar un entorno virtual para no interferir con los paquetes del sistema:
+
 ```bash
-pip3 install yt-dlp requests --break-system-packages
+sudo apt install python3-venv
+python3 -m venv venv
+source venv/bin/activate
+pip install yt-dlp requests
 ```
 
+### 🛡️ Seguridad (Pre-commit)
+Para evitar subir credenciales por error, es obligatorio activar el escáner local antes de hacer commits:
+`pip3 install pre-commit && pre-commit install`
 #### Paso 5 — Añadir tu usuario al grupo Docker
 
 ```bash
