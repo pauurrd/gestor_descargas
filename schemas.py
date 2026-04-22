@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl, ConfigDict, Field
+from pydantic import BaseModel, HttpUrl, ConfigDict, Field, conlist
 from typing import List, Optional, Union, Literal
 
 class AuthBasic(BaseModel):
@@ -12,15 +12,15 @@ class AuthToken(BaseModel):
 
 class Archivo(BaseModel):
     nombre: str
-    fuentes: List[HttpUrl]
+    fuentes: conlist(HttpUrl, min_length=1)
 
 class RecursoImportacion(BaseModel):
     id_recurso: str
     nombre: Optional[str] = None
     nombre_grupo: Optional[str] = None
-    fuentes: Optional[List[HttpUrl]] = None
+    fuentes: Optional[conlist(HttpUrl, min_length=1)] = None
     archivos: Optional[List[Archivo]] = None
     auth: Optional[Union[AuthBasic, AuthToken]] = None
 
-    # Esto cumple el requisito crítico de eliminar campos no definidos
+
     model_config = ConfigDict(extra='ignore')

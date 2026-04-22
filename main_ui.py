@@ -171,17 +171,31 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         try:
             archivo = dialog.open_finish(resultado)
             if archivo:
-                import json
-                with open(archivo.get_path(), 'r') as f:
-                    datos = json.load(f)
+                import ijson
+                from schemas import RecursoImportacion
+                from pydantic import ValidationError
+
+                datos_validos = []
+                errores = 0
+
+                self.log("Leyendo JSON en modo streaming y validano...")
+
+                with open(archivo.get_path(), 'rb') as f:
+                    objetos_json = ijson.items(f, 'item')
+
+                    for item in objetos_json:
+                        try:
+                            modelo_validado = RecursoImportacion(**item)
+                            datos_validos.append(modelo_validado.model_dump(mode='json', exclude_none=True, by_alias=True))
+                        except ValidationError:
+                            errores += 1
                 
-                es_valido, mensaje_error = self.validar_estructura_json(datos)
-                if es_valido:
-                    self.log(f"✅ JSON validado correctamente. Procesando {len(datos)} elementos...")
-                    self.procesar_batch_json(datos)
+                if datos_validos:
+                    self.log(f"JSON procesado {len(datos_validos)} elementos válidos ({errores} descartados por formato).")
+                    self.procesar_batch_json(datos_validos)
                 else:
-                    self.log(f"❌ Error de formato en JSON: {mensaje_error}")
-                    
+                    self.log("No se encontró ningún elemento válido en el JSON.")
+            
         except Exception as e:
             if "Dismissed by user" in str(e):
                 return
