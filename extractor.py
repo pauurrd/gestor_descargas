@@ -3,6 +3,17 @@ import requests
 import urllib.parse
 import os
 import base64
+import logging
+import uuid
+import traceback
+
+# --- NUEVO: Sistema de Trazabilidad (Errores Opacos) ---
+logging.basicConfig(
+    filename='errores_internos.log',
+    level=logging.ERROR,
+    format='%(asctime)s - [%(levelname)s] - %(message)s'
+)
+# -------------------------------------------------------
 
 def extraer_enlace_real(url_publica, proxy=None):
     print(f"[*] Analizando URL con yt-dlp: {url_publica}")
@@ -36,7 +47,12 @@ def extraer_enlace_real(url_publica, proxy=None):
             return enlace_directo, nombre_final
             
         except Exception as e:
-            print(f"[-] Error al extraer con yt-dlp: {e}")
+            # Generar error opaco
+            trace_id = str(uuid.uuid4()).split('-')[0].upper()
+            error_oculto = f"TraceID: {trace_id} | Fallo yt-dlp | Error real: {str(e)} | StackTrace: {traceback.format_exc()}"
+            logging.error(error_oculto)
+            
+            print(f"[-] Error de extracción. Contacte a soporte con el código: {trace_id}")
             return None, None
 
 EXTENSIONES_EMPRESARIALES = {
@@ -75,11 +91,47 @@ def resolver_url(url_usuario, proxy=None):
     print("[*] Enlace genérico/vídeo detectado. Delegando a yt-dlp...")
     return extraer_enlace_real(url_usuario, proxy)
 
-def enviar_a_aria2(lista_urls, nombre_archivo, proxy=None, auth=None):
+def enviar_a_aria2(lista_urls, nombre_archivo, auth=None):
     rpc_url = "http://localhost:6800/jsonrpc"
     
     if isinstance(lista_urls, str):
         lista_urls = [lista_urls]
+
+    urls_definitivas = []
+    
+    for url in lista_urls:
+        if "execute-api.eu-west-1.amazonaws.com" in url:
+            print(f"[*] Interceptando URL de AWS: {url}")
+            headers = {}
+            if auth:
+                tipo = auth.get('tipo', '').lower()
+                if tipo == 'basic':
+                    user = auth.get('user')
+                    passwd = auth.get('pass')
+                    credenciales = base64.b64encode(f"{user}:{passwd}".encode('utf-8')).decode('utf-8')
+                    headers["X-My-App-Auth"] = f"Basic {credenciales}"
+                elif tipo == 'token':
+                    headers["X-My-App-Auth"] = f"Bearer {auth.get('token')}"
+            
+            try:
+                proxies = {
+                    "http": "http://127.0.0.1:8118",
+                    "https": "http://127.0.0.1:8118"
+                }
+                respuesta_api = requests.get(url, headers=headers, proxies=proxies, allow_redirects=False)
+                
+                if respuesta_api.status_code == 302:
+                    url_s3_pura = respuesta_api.headers.get('Location')
+                    urls_definitivas.append(url_s3_pura)
+                    print("[*] URL prefirmada de S3 obtenida con éxito.")
+                else:
+                    print(f"[-] Fallo en API Gateway. Status: {respuesta_api.status_code}")
+                    return None
+            except Exception as e:
+                print(f"[-] Error al interceptar API: {e}")
+                return None
+        else:
+            urls_definitivas.append(url)
 
     opciones = {
         "out": nombre_archivo,
@@ -93,38 +145,26 @@ def enviar_a_aria2(lista_urls, nombre_archivo, proxy=None, auth=None):
         "retry-wait": "10",
         "continue": "true",
         "always-resume": "true",
-        "max-file-not-found": "10"
+        "max-file-not-found": "10",
+        "disable-ipv6": "true" 
     }
-
-    if proxy:
-        print(f"[*] 🛡️ Enrutando descarga a través del proxy: {proxy}")
-        opciones["all-proxy"] = proxy
-        opciones["disable-ipv6"] = "true"
-    else:
-        print("[*] ⚠️ ADVERTENCIA: Usando conexión directa (Sin Proxy)")
-    
-    if auth:
-        tipo = auth.get('tipo', '').lower()
-        if tipo == 'basic':
-            user = auth.get('user')
-            passwd = auth.get('pass')
-            credenciales = base64.b64encode(f"{user}:{passwd}".encode('utf-8')).decode('utf-8')
-            opciones["header"] = [f"X-My-App-Auth: Basic {credenciales}"]
-        elif tipo == 'token':
-            opciones["header"] = [f"X-My-App-Auth: Bearer {auth.get('token')}"]
-    
+        
     payload = {
         "jsonrpc": "2.0",
         "id": "batch_import",
         "method": "aria2.addUri",
-        "params": [lista_urls, opciones]
+        "params": [urls_definitivas, opciones]
     }
     
     try:
         respuesta = requests.post(rpc_url, json=payload)
         return respuesta.json()
     except Exception as e:
-        print(f"[-] Error en batch: {e}")
+        trace_id = str(uuid.uuid4()).split('-')[0].upper()
+        error_oculto = f"TraceID: {trace_id} | Fallo de conexión RPC Aria2 | Error real: {str(e)} | StackTrace: {traceback.format_exc()}"
+        logging.error(error_oculto)
+        
+        print(f"[-] Error interno de red. Contacte a soporte con el código: {trace_id}")
         return None
 
 def obtener_estado_aria2():
@@ -138,7 +178,11 @@ def obtener_estado_aria2():
         respuesta = requests.post("http://localhost:6800/jsonrpc", json=payload)
         datos = respuesta.json()
         if 'result' in datos: return datos['result']
-    except: return []
+    except Exception as e:
+        # Aquí no imprimimos el error opaco porque saturaría la UI (se ejecuta cada segundo)
+        trace_id = str(uuid.uuid4()).split('-')[0].upper()
+        logging.error(f"TraceID: {trace_id} | Fallo tellActive | Error: {str(e)}")
+        return []
     return []
 
 def formatear_tamano(bytes_str):
@@ -161,20 +205,26 @@ def obtener_info_gid(gid):
         respuesta = requests.post("http://localhost:6800/jsonrpc", json=payload)
         datos = respuesta.json()
         if 'result' in datos: return datos['result']
-    except: return None
+    except Exception as e:
+        trace_id = str(uuid.uuid4()).split('-')[0].upper()
+        logging.error(f"TraceID: {trace_id} | Fallo tellStatus | Error: {str(e)}")
+        return None
     return None
 
 def pausar_descarga_aria2(gid):
     try: requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "pause", "method": "aria2.pause", "params": [gid]})
-    except: pass
+    except Exception as e:
+        logging.error(f"TraceID: {str(uuid.uuid4()).split('-')[0].upper()} | Fallo pause | Error: {str(e)}")
 
 def reanudar_descarga_aria2(gid):
     try: requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "unpause", "method": "aria2.unpause", "params": [gid]})
-    except: pass
+    except Exception as e:
+        logging.error(f"TraceID: {str(uuid.uuid4()).split('-')[0].upper()} | Fallo unpause | Error: {str(e)}")
 
 def cancelar_descarga_aria2(gid):
     try: requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "remove", "method": "aria2.remove", "params": [gid]})
-    except: pass
+    except: Exception as e:
+        logging.error(f"TraceID: {str(uuid.uuid4()).split('-')[0].upper()} | Fallo remove | Error: {str(e)}")
 
 def configurar_limite_descargas(max_concurrentes=2):
     """
@@ -198,4 +248,4 @@ def configurar_limite_descargas(max_concurrentes=2):
     try:
         requests.post("http://localhost:6800/jsonrpc", json=payload)
     except Exception as e:
-        print(f"[-] Error al configurar límite de colas: {e}")  
+        print(f"[-] Error al configurar límite de colas: {e}")

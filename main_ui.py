@@ -4,6 +4,9 @@ import gi
 import os
 import hashlib
 import urllib.parse
+import json
+from schemas import RecursoImportacion
+from pydantic import ValidationError
 
 os.environ['no_proxy'] = 'localhost,127.0.0.1,::1'
 
@@ -77,39 +80,6 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         caja_input.append(btn_importar)
         caja_derecha.append(caja_input)
 
-        caja_proxy = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        caja_proxy.set_margin_start(10)
-        caja_proxy.set_margin_end(10)
-        
-        self.lbl_proxy = Gtk.Label(label="🌐 Servidor Proxy:")
-        self.entrada_proxy = Gtk.Entry()
-        self.entrada_proxy.set_hexpand(True)
-        self.entrada_proxy.set_placeholder_text("Inserta el proxy de la empresa. Ej: http://14.56.118.34:3128") 
-        self.entrada_proxy.connect("changed", self.actualizar_luz_proxy)
-        self.lbl_luz_proxy = Gtk.Label(label="🔴 Directa")
-
-        caja_proxy.append(self.entrada_proxy)
-        caja_proxy.append(self.lbl_luz_proxy)
-        caja_derecha.append(caja_proxy)
-        
-        expander = Gtk.Expander(label="⚙️ Opciones Avanzadas")
-        expander.set_margin_start(10)
-        expander.set_margin_end(10)
-        
-        caja_avanzada = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        caja_avanzada.set_margin_top(5)
-        
-        self.check_directa = Gtk.CheckButton(label="⚠️ Forzar Descarga Directa (Ignorar Proxy)")
-        self.check_directa.connect("toggled", self.on_check_directa_toggled)
-        caja_avanzada.append(self.check_directa)
-
-        self.check_tor = Gtk.CheckButton(label="🧅 Enrutar descargas por la Red Tor")
-        self.check_tor.connect("toggled", self.on_check_tor_toggled)
-        caja_avanzada.append(self.check_tor)
-        
-        expander.set_child(caja_avanzada)
-        caja_derecha.append(expander)
-
         self.store = Gio.ListStore(item_type=DescargaItem)
         self.filtro = Gtk.CustomFilter.new(match_func=self.logica_de_filtrado)
         self.filter_model = Gtk.FilterListModel(model=self.store, filter=self.filtro)
@@ -167,67 +137,8 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         init_db() 
         self.log("🗄️ Base de datos local conectada.")
         self.sidebar.select_row(self.sidebar.get_row_at_index(0))
-        self.comprobar_proxy_sistema()
+        self.log("🔒 Entorno seguro activado: Tráfico gestionado por cortafuegos (Docker).")
         GLib.timeout_add(1000, self.monitorizar_descargas)
-
-    def comprobar_proxy_sistema(self):
-        """Lee el proxy del SO (Variables de entorno o GNOME Settings)"""
-        proxy_sys = os.environ.get('http_proxy') or os.environ.get('https_proxy') or os.environ.get('HTTP_PROXY')
-
-        if not proxy_sys:
-            try:
-                settings = Gio.Settings.new("org.gnome.system.proxy")
-                if settings.get_string("mode") == "manual":
-                    http_settings = Gio.Settings.new("org.gnome.system.proxy.http")
-                    host = http_settings.get_string("host")
-                    port = http_settings.get_int("port")
-                    
-                    if host and port:
-                        proxy_sys = f"http://{host}:{port}"
-            except Exception as e:
-                pass
-        
-        if proxy_sys:
-            self.log(f"⚙️ Proxy del SO detectado e importado automáticamente: {proxy_sys}")
-            self.entrada_proxy.set_text(proxy_sys)
-            
-            self.entrada_proxy.set_sensitive(False)
-            self.check_directa.set_sensitive(False)
-            self.check_tor.set_sensitive(False) 
-
-        self.actualizar_luz_proxy()
-
-    def actualizar_luz_proxy(self, *args):
-        if self.check_directa.get_active():
-            self.lbl_luz_proxy.set_markup("<span foreground='red'>🔴 Directa</span>")
-            return
-            
-        if hasattr(self, 'check_tor') and self.check_tor.get_active():
-            self.lbl_luz_proxy.set_markup("<span foreground='purple'>🟣 Red Tor (Privoxy)</span>")
-            return
-
-        texto = self.entrada_proxy.get_text().strip().lower()
-        
-        if not texto:
-            self.lbl_luz_proxy.set_markup("<span foreground='red'>🔴 Directa</span>")
-        elif not self.entrada_proxy.get_sensitive():
-            self.lbl_luz_proxy.set_markup("<span foreground='blue'>🔵 Proxy del Sistema Detectado</span>")
-        else:
-            self.lbl_luz_proxy.set_markup("<span foreground='green'>🟢 Proxy Activo</span>")
-    
-    def on_check_tor_toggled(self, checkbutton):
-        if checkbutton.get_active():
-            self.check_directa.set_active(False) 
-            
-            self.entrada_proxy.set_text("http://127.0.0.1:8118")
-            self.entrada_proxy.set_sensitive(False)
-            self.log("🧅 Tráfico enrutado a través de la red Tor (vía Privoxy).")
-        else:
-            self.entrada_proxy.set_text("")
-            self.entrada_proxy.set_sensitive(True)
-            self.log("🌐 Red Tor desactivada.")
-            
-        self.actualizar_luz_proxy()
 
     def procesar_json_importado(self, datos_json):
         descargas_unicas = {}
@@ -244,8 +155,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             nombre = info.get('nombre', "archivo_descargado")
             auth = info.get('auth')
             
-            proxy = self.entrada_proxy.get_text().strip() if not self.check_directa.get_active() else None
-            threading.Thread(target=self.tarea_background_multiple, args=(urls, nombre, proxy, auth)).start()
+            threading.Thread(target=self.tarea_background_multiple, args=(urls, nombre, auth)).start()
 
     def on_btn_importar_clicked(self, btn):
         dialog = Gtk.FileDialog(title="Seleccionar lista de descargas (JSON)")
@@ -262,23 +172,38 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         try:
             archivo = dialog.open_finish(resultado)
             if archivo:
-                import json
-                with open(archivo.get_path(), 'r') as f:
-                    datos = json.load(f)
+                import ijson
+                from schemas import RecursoImportacion
+                from pydantic import ValidationError
+
+                datos_validos = []
+                errores = 0
+
+                self.log("Leyendo JSON en modo streaming y validano...")
+
+                with open(archivo.get_path(), 'rb') as f:
+                    objetos_json = ijson.items(f, 'item')
+
+                    for item in objetos_json:
+                        try:
+                            modelo_validado = RecursoImportacion(**item)
+                            datos_validos.append(modelo_validado.model_dump(mode='json', exclude_none=True, by_alias=True))
+                        except ValidationError:
+                            errores += 1
                 
-                es_valido, mensaje_error = self.validar_estructura_json(datos)
-                if es_valido:
-                    self.log(f"✅ JSON validado correctamente. Procesando {len(datos)} elementos...")
-                    self.procesar_batch_json(datos)
+                if datos_validos:
+                    self.log(f"JSON procesado {len(datos_validos)} elementos válidos ({errores} descartados por formato).")
+                    self.procesar_batch_json(datos_validos)
                 else:
-                    self.log(f"❌ Error de formato en JSON: {mensaje_error}")
-                    
+                    self.log("No se encontró ningún elemento válido en el JSON.")
+            
         except Exception as e:
+            if "Dismissed by user" in str(e):
+                return
             self.log(f"❌ Error crítico al leer JSON: {str(e)}")
 
     def procesar_batch_json(self, datos):
         procesados = set()
-        proxy_actual = self.entrada_proxy.get_text().strip() if not self.check_directa.get_active() else None
 
         for item in datos:
             auth_grupo = item.get('auth')
@@ -306,7 +231,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                     
                     threading.Thread(
                         target=self.tarea_background_multiple, 
-                        args=(urls, nombre_visual, proxy_actual, auth_parte)
+                        args=(urls, nombre_visual, auth_parte)
                     ).start()
                     
             else:
@@ -321,88 +246,72 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                 
                 threading.Thread(
                     target=self.tarea_background_multiple, 
-                    args=(urls, nombre_archivo, proxy_actual, auth_grupo)
+                    args=(urls, nombre_archivo, auth_grupo)
                 ).start()
 
-    def validar_estructura_json(self, datos):
-        if not isinstance(datos, list):
-            return False, "El archivo debe contener una lista de objetos []."
-        
-        for i, item in enumerate(datos):
-            if "archivos" in item:
-                archivos = item.get("archivos")
-                if not isinstance(archivos, list) or len(archivos) == 0:
-                    return False, f"El grupo {i+1} no tiene una lista de 'archivos' válida."
+    def al_seleccionar_archivo_json(self, dialog, resultado):
+        try:
+            archivo = dialog.open_finish(resultado)
+            if archivo:
+                with open(archivo.get_path(), 'r') as f:
+                    datos_crudos = json.load(f)
                 
-                for j, parte in enumerate(archivos):
-                    fuentes = parte.get('fuentes')
-                    if not fuentes or not isinstance(fuentes, list) or len(fuentes) == 0:
-                        return False, f"El archivo {j+1} del grupo {i+1} no tiene una lista de 'fuentes' válida."
-            else:
-                fuentes = item.get('fuentes')
-                if not fuentes or not isinstance(fuentes, list) or len(fuentes) == 0:
-                    return False, f"El elemento {i+1} no tiene una lista de 'fuentes' válida."
+                if not isinstance(datos_crudos, list):
+                    self.log("❌ Error: El JSON debe contener una lista [].")
+                    return
                 
-                if not item.get('nombre') and not item.get('id_recurso'):
-                    return False, f"El elemento {i+1} debe tener un 'nombre' o 'id_recurso'."
-            
-            auth = item.get('auth')
-            if auth:
-                tipo = auth.get('tipo')
-                nombre_ref = item.get('nombre_grupo') or item.get('nombre') or f"Elemento {i+1}"
-                if tipo == 'basic' and (not auth.get('user') or not auth.get('pass')):
-                    return False, f"Error en {nombre_ref}: Falta 'user' o 'pass' para auth basic."
-                if tipo == 'token' and not auth.get('token'):
-                    return False, f"Error en {nombre_ref}: Falta el campo 'token'."
+                datos_validados = []
+                errores = 0
+                
+                # Pasamos cada elemento por el colador de Pydantic
+                for i, item in enumerate(datos_crudos):
+                    try:
+                        recurso_seguro = RecursoImportacion(**item)
+                        # by_alias=True es vital para que "pass" vuelva a ser "pass" y no "password"
+                        datos_validados.append(recurso_seguro.model_dump(by_alias=True, exclude_none=True))
+                    except ValidationError as e:
+                        errores += 1
+                        self.log(f"⚠️ Error de seguridad/formato en el elemento {i+1}. Ignorado.")
+                        print(f"Detalle Pydantic: {e}")
+                
+                if datos_validados:
+                    self.log(f"✅ JSON validado: {len(datos_validados)} elementos seguros ({errores} ignorados por fallos).")
+                    self.procesar_batch_json(datos_validados)
+                else:
+                    self.log("❌ Ningún elemento del JSON pasó el filtro de seguridad (Pydantic).")
                     
-        return True, None
+        except Exception as e:
+            self.log(f"❌ Error crítico al leer JSON: {str(e)}")
+            
 
-    def tarea_background_multiple(self, urls, nombre, proxy, auth):
+    def tarea_background_multiple(self, urls, nombre, auth=None):
         GLib.idle_add(self.log, f"Iniciando descarga múltiple: {nombre}")
-        respuesta = enviar_a_aria2(urls, nombre, proxy, auth)
+        respuesta = enviar_a_aria2(urls, nombre, auth)
         gid = respuesta.get('result') if respuesta else None
         
         if gid:
-            GLib.idle_add(self.registrar_descarga_ui, gid, nombre, urls[0], proxy)
+            GLib.idle_add(self.registrar_descarga_ui, gid, nombre, urls[0])
         else:
             error_msg = respuesta.get('error', {}).get('message', 'Fallo desconocido o de conexión') if respuesta else 'Fallo de red'
             GLib.idle_add(self.log, f"❌ Aria2 rechazó el enlace '{nombre}': {error_msg}")
 
-    def registrar_descarga_ui(self, gid, nombre, url_ref, proxy):
-        nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_ref, proxy)
+    def registrar_descarga_ui(self, gid, nombre, url_ref):
+        nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_ref, "Protegido por Docker")
         self.store.append(nuevo)
         self.filtro.changed(Gtk.FilterChange.DIFFERENT)
 
-    def on_check_directa_toggled(self, checkbutton):
-        if checkbutton.get_active():
-            self.check_tor.set_active(False) 
-            
-        self.entrada_proxy.set_sensitive(not checkbutton.get_active() and not self.check_tor.get_active())
-        self.actualizar_luz_proxy()
-
     def on_btn_descargar_clicked(self, widget=None):
         url = self.entrada_url.get_text().strip()
-        
+
         if not url:
             return
 
         if not url.startswith(('http://', 'https://', 'ftp://')):
-            self.log(f"⚠️ ERROR: El enlace '{url}' es inválido. Debe empezar obligatoriamente por http://, https:// o ftp://")
+            self.log(f"⚠️ ERROR: El enlace '{url}' es inválido. Debe empezar por http://, https:// o ftp://")
             return
 
-        if self.check_directa.get_active():
-            proxy_a_usar = None
-        else:
-            proxy_a_usar = self.entrada_proxy.get_text().strip()
-            if not proxy_a_usar:
-                self.log("⚠️ ERROR: El proxy está vacío. Escribe un proxy corporativo o marca la casilla 'Forzar Descarga Directa'.")
-                return
-            if not proxy_a_usar.startswith(('http://', 'https://', 'socks5://')):
-                self.log(f"⚠️ ERROR: El proxy '{proxy_a_usar}' es inválido. Debe empezar obligatoriamente por http://, https://, socks5://...")
-                return
-        
         self.entrada_url.set_text("")
-        threading.Thread(target=self.tarea_background, args=(url, proxy_a_usar)).start()
+        threading.Thread(target=self.tarea_background, args=(url,)).start()
 
     def on_btn_reintentar_clicked(self, btn):
         item = self.selection_model.get_selected_item()
@@ -414,7 +323,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                 return
                 
             self.log(f"🔄 Reintentando descarga: {item.nombre}")
-            respuesta = enviar_a_aria2(item.url, item.nombre, item.proxy)
+            respuesta = enviar_a_aria2(item.url, item.nombre, None)
             nuevo_gid = respuesta.get('result', None) if respuesta else None
             
             if nuevo_gid:
@@ -427,7 +336,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             else:
                 self.log(f"❌ Fallo al intentar reiniciar {item.nombre} en aria2.")
 
-    def guardar_historial_background(self, nombre_json, url_origen, proxy, estado_final):
+    def guardar_historial_background(self, nombre_json, url_origen, estado_final):
         ruta_url = urllib.parse.urlparse(url_origen).path
         nombre_original = os.path.basename(ruta_url)
         if not nombre_original:
@@ -448,7 +357,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         else:
             hash_archivo = "No aplicable (Fallido)"
 
-        registrar_descarga(nombre_json, nombre_original, hash_archivo, url_origen, proxy, estado_final)
+        registrar_descarga(nombre_json, nombre_original, hash_archivo, url_origen, "Docker Firewall", estado_final)
 
     def on_btn_pausar_clicked(self, btn):
         item = self.selection_model.get_selected_item()
@@ -510,36 +419,36 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         columna = Gtk.ColumnViewColumn(title=titulo, factory=factory)
         self.tabla.append_column(columna)
 
-    def tarea_background(self, url, proxy):
+    def tarea_background(self, url):
         try:
-            url_real, nombre = resolver_url(url, proxy)
+            url_real, nombre = resolver_url(url, None)
             nombre_a_mostrar = nombre if nombre else url
-            GLib.idle_add(self.actualizar_ui_tras_busqueda, url_real, nombre_a_mostrar, proxy)
+            GLib.idle_add(self.actualizar_ui_tras_busqueda, url_real, nombre_a_mostrar)
         except Exception as e:
             GLib.idle_add(self.log, f"Error: {e}")
 
-    def actualizar_ui_tras_busqueda(self, url_real, nombre, proxy):
+    def actualizar_ui_tras_busqueda(self, url_real, nombre):
         if url_real:
             self.log(f"Enviando a aria2: {nombre}")
-            respuesta = enviar_a_aria2(url_real, nombre, proxy)
+            respuesta = enviar_a_aria2(url_real, nombre, None)
             gid = respuesta.get('result', None) if respuesta else None
             
             if gid:
-                nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_real, proxy)
+                nuevo = DescargaItem(gid, nombre, "Pendiente...", "0 MB", "0%", "0 KB/s", url_real, "Protegido por Docker")
                 self.store.append(nuevo)
                 self.filtro.changed(Gtk.FilterChange.DIFFERENT)
             else:
                 self.log(f"❌ Aria2 rechazó el enlace: {nombre}")
                 import random
                 fake_gid = f"error_aria2_{random.randint(1000, 9999)}"
-                nuevo_error = DescargaItem(fake_gid, nombre, "❌ Rechazado", "-", "Fallido", "-", url_real, proxy)
+                nuevo_error = DescargaItem(fake_gid, nombre, "❌ Rechazado", "-", "Fallido", "-", url_real, "Protegido por Docker")
                 self.store.append(nuevo_error)
                 self.filtro.changed(Gtk.FilterChange.DIFFERENT)
         else:
             self.log(f"⚠️ No se pudo obtener enlace válido de: {nombre}")
             import random
             fake_gid = f"error_{random.randint(1000, 9999)}"
-            nuevo_error = DescargaItem(fake_gid, nombre, "❌ Error (URL inválida)", "-", "Fallido", "-", "", proxy)
+            nuevo_error = DescargaItem(fake_gid, nombre, "❌ Error (URL inválida)", "-", "Fallido", "-", "", "Protegido por Docker")
             self.store.append(nuevo_error)
             self.filtro.changed(Gtk.FilterChange.DIFFERENT)
             
@@ -594,7 +503,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                             
                                 threading.Thread(
                                     target=self.guardar_historial_background, 
-                                    args=(item_ui.nombre, item_ui.url, item_ui.proxy, "Completado")
+                                    args=(item_ui.nombre, item_ui.url, "Completado")
                                 ).start()
                                 
                         elif estado_real == 'error':
@@ -606,7 +515,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                         
                                 threading.Thread(
                                     target=self.guardar_historial_background, 
-                                    args=(item_ui.nombre, item_ui.url, item_ui.proxy, f"Error ({error_code})")
+                                    args=(item_ui.nombre, item_ui.url, f"Error ({error_code})")
                                 ).start()
                         
                         elif estado_real == 'removed':

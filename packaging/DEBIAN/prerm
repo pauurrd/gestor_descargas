@@ -1,0 +1,6 @@
+#!/bin/bash
+set -e
+
+echo "[gestor-descargas] Deteniendo servicio aria2-rpc..."
+systemctl stop aria2-rpc.service  || true
+systemctl disable aria2-rpc.service || true
