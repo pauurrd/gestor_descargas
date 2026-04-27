@@ -223,5 +223,29 @@ def reanudar_descarga_aria2(gid):
 
 def cancelar_descarga_aria2(gid):
     try: requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "remove", "method": "aria2.remove", "params": [gid]})
-    except Exception as e:
+    except: Exception as e:
         logging.error(f"TraceID: {str(uuid.uuid4()).split('-')[0].upper()} | Fallo remove | Error: {str(e)}")
+
+def configurar_limite_descargas(max_concurrentes=2):
+    """
+    ToDo: Configurar el límite de descargas simultáneas en aria2.
+
+    NOTA DE DISEÑO:
+    El límite de descargas simultáneas idealmente debería ser dinámico y depender de:
+    1. La estabilidad de la red (medible utilizando el proxy del SO).
+    2. El nivel de confianza (health score) del host de descarga.
+    3. El peso de los archivos (a mayor peso se espera mayor estabilidad pero también menor velocidad).
+    4. La capacidad asumible de riesgo (calculada en base a las descargas pausables y pausadas).
+    
+    Actualmente se establece mediante un número fijo, ya que no hay un algoritmo que calcule esto de manera adecuada por el momento.
+    """
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "config_limit",
+        "method": "aria2.changeGlobalOption",
+        "params": [{"max-concurrent-downloads": str(max_concurrentes)}]
+    }
+    try:
+        requests.post("http://localhost:6800/jsonrpc", json=payload)
+    except Exception as e:
+        logging.error(f"TraceID: {str(uuid.uuid4()).split('-')[0].upper()} | Fallo config_limit | Error: {str(e)}")
