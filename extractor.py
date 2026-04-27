@@ -248,4 +248,4 @@ def configurar_limite_descargas(max_concurrentes=2):
     try:
         requests.post("http://localhost:6800/jsonrpc", json=payload)
     except Exception as e:
-        print(f"[-] Error al configurar límite de colas: {e}")
+        logging.error(f"TraceID: {str(uuid.uuid4()).split('-')[0].upper()} | Fallo config_limit | Error: {str(e)}")
