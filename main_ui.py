@@ -7,6 +7,7 @@ import urllib.parse
 import json
 from schemas import RecursoImportacion
 from pydantic import ValidationError
+from database import init_db, registrar_descarga, upsert_entidad
 
 os.environ['no_proxy'] = 'localhost,127.0.0.1,::1'
 
@@ -18,8 +19,7 @@ from gi.repository import Gtk, Adw, Gio, GLib, GObject
 
 from extractor import (resolver_url, enviar_a_aria2, obtener_estado_aria2, 
                        formatear_tamano, obtener_info_gid, 
-                       pausar_descarga_aria2, reanudar_descarga_aria2, cancelar_descarga_aria2,
-                       configurar_limite_descargas)
+                       pausar_descarga_aria2, reanudar_descarga_aria2, cancelar_descarga_aria2)
 
 class VentanaPrincipal(Adw.ApplicationWindow):
     def __init__(self, app):
@@ -203,51 +203,33 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             self.log(f"❌ Error crítico al leer JSON: {str(e)}")
 
     def procesar_batch_json(self, datos):
-        procesados = set()
+        self.log(f"🛠️ Fase de Enriquecimiento: Normalizando {len(datos)} elementos...")
+        nuevos_recursos = 0
 
         for item in datos:
-            auth_grupo = item.get('auth')
-            
             if "archivos" in item:
                 id_grupo = item.get("id_recurso", "grupo_desconocido")
-                nombre_grupo = item.get("nombre_grupo", id_grupo)
-                
-                if id_grupo in procesados:
-                    continue
-                procesados.add(id_grupo)
-                
-                self.log(f"📦 Detectado grupo: {nombre_grupo} ({len(item['archivos'])} partes)")
-                
-                for parte in item["archivos"]:
-                    urls = parte.get("fuentes", [])
-                    nombre_parte = parte.get("nombre", "parte_desconocida")
-                    
-                    auth_parte = parte.get('auth', auth_grupo) 
-                    
-                    if not urls:
-                        continue
-                        
-                    nombre_visual = f"[{nombre_grupo}] {nombre_parte}"
-                    
-                    threading.Thread(
-                        target=self.tarea_background_multiple, 
-                        args=(urls, nombre_visual, auth_parte)
-                    ).start()
-                    
-            else:
-                id_unico = item.get('id_recurso') or item.get('nombre')
-                urls = item.get('fuentes', [])
-                
-                if not urls or id_unico in procesados:
-                    continue
-                procesados.add(id_unico)
+                auth_grupo = item.get('auth')
 
-                nombre_archivo = item.get('nombre', f"descarga_{id_unico}")
+                for parte in item["archivos"]:
+                    # Fabricamos un mini-diccionario temporal para el upsert
+                    uid_parte = f"{id_grupo}_{parte.get('nombre', 'parte')}"
+                    item_procesar = {
+                        "id_recurso": uid_parte,
+                        "nombre": f"[{item.get('nombre_grupo', id_grupo)}] {parte.get('nombre')}",
+                        "fuentes": parte.get("fuentes", []),
+                        "auth": parte.get('auth', auth_grupo)
+                    }
+                    if upsert_entidad(item_procesar):
+                        nuevos_recursos += 1
+                else:
+                # Archivo simple
+                if upsert_entidad(item):
+                    nuevos_recursos += 1
+            
+        self.log(f"🗄️ {nuevos_recursos} entidades expandidas/guardadas en la base de datos (Estado: 'nuevo').")
+        self.log("⏳ El Scheduler (pendiente de programar) decidirá el orden de descarga.")
                 
-                threading.Thread(
-                    target=self.tarea_background_multiple, 
-                    args=(urls, nombre_archivo, auth_grupo)
-                ).start()
 
     def al_seleccionar_archivo_json(self, dialog, resultado):
         try:
