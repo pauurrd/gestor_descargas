@@ -23,7 +23,7 @@ def init_db():
         )
     ''')
 
-        cursor.execute('''
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS files (
             uid TEXT PRIMARY KEY,
             nombre TEXT NOT NULL,
@@ -35,7 +35,7 @@ def init_db():
     ''')
 
 
-        cursor.execute('''
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS file_sources (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             file_uid TEXT NOT NULL,
@@ -87,9 +87,12 @@ def upsert_entidad(item_dict):
     """Inserta un nuevo archivo o expande las fuentes si el UID ya existe.
     (Normalización y Expansión de Entidades).
     """
+    print(f"\n[DEBUG] Entidad cruda recibida de Pydantic: {item_dict}")
 
-    uid = item_dict.get('id_recurso')
-    if not uid: return False
+    uid = item_dict.get('id_recurso') or item_dict.get('id') or item_dict.get('nombre')
+    if not uid:
+        print("[-] FALLO: No se encontró un identificador válido (UID) en el diccionario.")
+        return False
 
     nombre = item_dict.get('nombre', f"descarga_{uid}")
     fecha_cruda = item_dict.get('fecha_creacion')
@@ -112,7 +115,10 @@ def upsert_entidad(item_dict):
 
         # 2. Expansión de entidades: Insertar las nuevas fuentes (URLs) asociadas a ese UID
         for fuente in fuentes:
-            url_limpia = fuente.strip()
+            url_limpia = str(fuente).strip()
+            
+            if not url_limpia:
+                continue
             # Se usa INSERT OR IGNORE por el UNIQUE constraint de la URL. Si la URL ya existe, no la duplica.
             cursor.execute('''
                 INSERT OR IGNORE INTO file_sources (file_uid, url, auth_tipo, auth_credencial)
@@ -120,9 +126,11 @@ def upsert_entidad(item_dict):
             ''', (uid, url_limpia, auth_tipo, auth_cred))
 
             conn.commit()
+            print(f"[+] ÉXITO: Entidad {uid} guardada correctamente en SQLite.")
             return True
+
     except Exception as e:
-        print(f"Error en UPSERT: {e}")
+        print(f"[-] FALLO SQL al insertar {uid}: {str(e)}")
         return False
     finally:
-        conn.console()
+        conn.close()

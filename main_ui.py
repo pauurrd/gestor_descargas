@@ -168,46 +168,15 @@ class VentanaPrincipal(Adw.ApplicationWindow):
 
         dialog.open(self, None, self.al_seleccionar_archivo_json)
 
-    def al_seleccionar_archivo_json(self, dialog, resultado):
-        try:
-            archivo = dialog.open_finish(resultado)
-            if archivo:
-                import ijson
-                from schemas import RecursoImportacion
-                from pydantic import ValidationError
-
-                datos_validos = []
-                errores = 0
-
-                self.log("Leyendo JSON en modo streaming y validano...")
-
-                with open(archivo.get_path(), 'rb') as f:
-                    objetos_json = ijson.items(f, 'item')
-
-                    for item in objetos_json:
-                        try:
-                            modelo_validado = RecursoImportacion(**item)
-                            datos_validos.append(modelo_validado.model_dump(mode='json', exclude_none=True, by_alias=True))
-                        except ValidationError:
-                            errores += 1
-                
-                if datos_validos:
-                    self.log(f"JSON procesado {len(datos_validos)} elementos válidos ({errores} descartados por formato).")
-                    self.procesar_batch_json(datos_validos)
-                else:
-                    self.log("No se encontró ningún elemento válido en el JSON.")
-            
-        except Exception as e:
-            if "Dismissed by user" in str(e):
-                return
-            self.log(f"❌ Error crítico al leer JSON: {str(e)}")
-
     def procesar_batch_json(self, datos):
         self.log(f"🛠️ Fase de Enriquecimiento: Normalizando {len(datos)} elementos...")
         nuevos_recursos = 0
 
         for item in datos:
-            if "archivos" in item:
+            print(f"\n[DEBUG MAIN_UI] 🕵️ Analizando elemento: {item.get('id_recurso', 'Desconocido')}")
+
+            if item.get("archivos"):
+                print(f"[DEBUG MAIN_UI] 📁 Detectado como grupo de archivos.")
                 id_grupo = item.get("id_recurso", "grupo_desconocido")
                 auth_grupo = item.get('auth')
 
@@ -222,9 +191,13 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                     }
                     if upsert_entidad(item_procesar):
                         nuevos_recursos += 1
-                else:
+            else:
+                print(f"[DEBUG MAIN_UI] 📄 Detectado como archivo simple. Enviando a SQLite...")
                 # Archivo simple
-                if upsert_entidad(item):
+                exito = upsert_entidad(item)
+                print(f"[DEBUG MAIN_UI] 💾 Resultado de guardar en SQLite: {exito}")
+
+                if exito:
                     nuevos_recursos += 1
             
         self.log(f"🗄️ {nuevos_recursos} entidades expandidas/guardadas en la base de datos (Estado: 'nuevo').")
@@ -263,6 +236,8 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                     self.log("❌ Ningún elemento del JSON pasó el filtro de seguridad (Pydantic).")
                     
         except Exception as e:
+            if "Dismissed by user" in str(e):
+                return
             self.log(f"❌ Error crítico al leer JSON: {str(e)}")
             
 
