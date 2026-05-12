@@ -53,8 +53,8 @@ def analizar_capacidades_url(url, auth_tipo, auth_credencial):
 
     # Usamos el proxy del sistema que configurasteis para AWS
     proxies = {
-        "http": "http://127.0.0.1:8118",
-        "https": "http://127.0.0.1:8118"
+        "http": None,
+        "https": None
     }
 
     try:
