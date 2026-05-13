@@ -25,20 +25,26 @@ def actualizar_capacidades_fuente(id_fuente, estado_red, soporta_pausa, tamano_b
     
     # Marcamos como 'analizado' o 'error_red' dependiendo del código HTTP
     nuevo_estado = 'analizado' if estado_red == 200 else f'error_{estado_red}'
+
+    score = 0
+    if estado_red == 200:
+        score += 50
+    if soporta_pausa:
+        score += 50
     
-    # En SQLite no podemos alterar tablas fácilmente, así que para esta iteración 
-    # guardaremos las capacidades usando la columna de estado por ahora, o 
-    # prepararemos el terreno para Eric.
+    try:
+        cursor.execute('''
+            UPDATE file_sources 
+            SET estado = ?, score = ?
+            WHERE id = ?
+        ''', (nuevo_estado, score, id_fuente))
+        conn.commit()
+        print(f"[+] Fuente {id_fuente} actualizada: HTTP {estado_red} | Pausa: {soporta_pausa} | Tamaño: {tamano_bytes}B | Score: {score}/100")
     
-    cursor.execute('''
-        UPDATE file_sources 
-        SET estado = ?
-        WHERE id = ?
-    ''', (nuevo_estado, id_fuente))
-    
-    conn.commit()
-    conn.close()
-    print(f"[+] Fuente {id_fuente} actualizada: HTTP {estado_red} | Pausa: {soporta_pausa} | Tamaño: {tamano_bytes}B")
+    except sqlite3.OperationalError as e:
+        print(f"[-] Error DB: {e}")
+    finally:
+        conn.close()
 
 def analizar_capacidades_url(url, auth_tipo, auth_credencial):
     """
@@ -52,10 +58,7 @@ def analizar_capacidades_url(url, auth_tipo, auth_credencial):
         headers["X-My-App-Auth"] = f"Bearer {auth_credencial}"
 
     # Usamos el proxy del sistema que configurasteis para AWS
-    proxies = {
-        "http": None,
-        "https": None
-    }
+    proxies = None
 
     try:
         # Petición HEAD: Solo pide las cabeceras, no el cuerpo del archivo. ¡Muy rápido!

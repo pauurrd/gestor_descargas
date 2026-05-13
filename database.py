@@ -44,7 +44,7 @@ def init_db():
             auth_credencial TEXT,
             score INTEGER DEFAULT 0,
             estado TEXT DEFAULT 'pendiente',
-            FOREIGN KEY(file_uid) REFERENCES file(uid)
+            FOREIGN KEY(file_uid) REFERENCES files(uid)
         )
     ''')
 
