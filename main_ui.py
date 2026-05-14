@@ -7,6 +7,7 @@ import urllib.parse
 import json
 from schemas import RecursoImportacion
 from pydantic import ValidationError
+from database import init_db, registrar_descarga, upsert_entidad
 
 os.environ['no_proxy'] = 'localhost,127.0.0.1,::1'
 
@@ -18,8 +19,7 @@ from gi.repository import Gtk, Adw, Gio, GLib, GObject
 
 from extractor import (resolver_url, enviar_a_aria2, obtener_estado_aria2, 
                        formatear_tamano, obtener_info_gid, 
-                       pausar_descarga_aria2, reanudar_descarga_aria2, cancelar_descarga_aria2,
-                       configurar_limite_descargas)
+                       pausar_descarga_aria2, reanudar_descarga_aria2, cancelar_descarga_aria2)
 
 class VentanaPrincipal(Adw.ApplicationWindow):
     def __init__(self, app):
@@ -136,9 +136,46 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.log("Sistema iniciado y listo para uso corporativo.")
         init_db() 
         self.log("🗄️ Base de datos local conectada.")
+        self.cargar_historial()
         self.sidebar.select_row(self.sidebar.get_row_at_index(0))
         self.log("🔒 Entorno seguro activado: Tráfico gestionado por cortafuegos (Docker).")
         GLib.timeout_add(1000, self.monitorizar_descargas)
+    
+
+    def cargar_historial(self):
+        """Lee la base de datos al arrancar y pinta los archivos en la pantalla."""
+        self.store.remove_all()
+        import sqlite3
+        import os
+        
+        HOME_DIR = os.path.expanduser("~")
+        DB_NAME = os.path.join(HOME_DIR, ".gestor_descargas_historial.db")
+        
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            
+            # Buscamos todos los archivos guardados
+            cursor.execute("SELECT uid, nombre, estado FROM files")
+            archivos = cursor.fetchall()
+            
+            for uid, nombre, estado in archivos:
+                # Buscamos la URL principal de ese archivo
+                cursor.execute("SELECT url FROM file_sources WHERE file_uid = ? LIMIT 1", (uid,))
+                url_row = cursor.fetchone()
+                url = url_row[0] if url_row else "Múltiples fuentes"
+                
+                # Lo metemos en la interfaz gráfica
+                estado_mostrar = "⏸ Pendiente" if estado == 'nuevo' else estado
+                nuevo = DescargaItem(uid, nombre, estado_mostrar, "-", "-", "-", url, "Cargado desde BD")
+                self.store.append(nuevo)
+                
+            conn.close()
+            self.log(f"📥 Memoria restaurada: {len(archivos)} descargas recuperadas del historial.")
+        except Exception as e:
+            self.log(f"⚠️ No se pudo cargar el historial: {e}")
+
+    
 
     def procesar_json_importado(self, datos_json):
         descargas_unicas = {}
@@ -168,86 +205,44 @@ class VentanaPrincipal(Adw.ApplicationWindow):
 
         dialog.open(self, None, self.al_seleccionar_archivo_json)
 
-    def al_seleccionar_archivo_json(self, dialog, resultado):
-        try:
-            archivo = dialog.open_finish(resultado)
-            if archivo:
-                import ijson
-                from schemas import RecursoImportacion
-                from pydantic import ValidationError
-
-                datos_validos = []
-                errores = 0
-
-                self.log("Leyendo JSON en modo streaming y validano...")
-
-                with open(archivo.get_path(), 'rb') as f:
-                    objetos_json = ijson.items(f, 'item')
-
-                    for item in objetos_json:
-                        try:
-                            modelo_validado = RecursoImportacion(**item)
-                            datos_validos.append(modelo_validado.model_dump(mode='json', exclude_none=True, by_alias=True))
-                        except ValidationError:
-                            errores += 1
-                
-                if datos_validos:
-                    self.log(f"JSON procesado {len(datos_validos)} elementos válidos ({errores} descartados por formato).")
-                    self.procesar_batch_json(datos_validos)
-                else:
-                    self.log("No se encontró ningún elemento válido en el JSON.")
-            
-        except Exception as e:
-            if "Dismissed by user" in str(e):
-                return
-            self.log(f"❌ Error crítico al leer JSON: {str(e)}")
-
     def procesar_batch_json(self, datos):
-        procesados = set()
+        self.log(f"🛠️ Fase de Enriquecimiento: Normalizando {len(datos)} elementos...")
+        nuevos_recursos = 0
 
         for item in datos:
-            auth_grupo = item.get('auth')
-            
-            if "archivos" in item:
-                id_grupo = item.get("id_recurso", "grupo_desconocido")
-                nombre_grupo = item.get("nombre_grupo", id_grupo)
-                
-                if id_grupo in procesados:
-                    continue
-                procesados.add(id_grupo)
-                
-                self.log(f"📦 Detectado grupo: {nombre_grupo} ({len(item['archivos'])} partes)")
-                
-                for parte in item["archivos"]:
-                    urls = parte.get("fuentes", [])
-                    nombre_parte = parte.get("nombre", "parte_desconocida")
-                    
-                    auth_parte = parte.get('auth', auth_grupo) 
-                    
-                    if not urls:
-                        continue
-                        
-                    nombre_visual = f"[{nombre_grupo}] {nombre_parte}"
-                    
-                    threading.Thread(
-                        target=self.tarea_background_multiple, 
-                        args=(urls, nombre_visual, auth_parte)
-                    ).start()
-                    
-            else:
-                id_unico = item.get('id_recurso') or item.get('nombre')
-                urls = item.get('fuentes', [])
-                
-                if not urls or id_unico in procesados:
-                    continue
-                procesados.add(id_unico)
+            print(f"\n[DEBUG MAIN_UI] 🕵️ Analizando elemento: {item.get('id_recurso', 'Desconocido')}")
 
-                nombre_archivo = item.get('nombre', f"descarga_{id_unico}")
-                
-                threading.Thread(
-                    target=self.tarea_background_multiple, 
-                    args=(urls, nombre_archivo, auth_grupo)
-                ).start()
+            if item.get("archivos"):
+                print(f"[DEBUG MAIN_UI] 📁 Detectado como grupo de archivos.")
+                id_grupo = item.get("id_recurso", "grupo_desconocido")
+                auth_grupo = item.get('auth')
+
+                for parte in item["archivos"]:
+                    # Fabricamos un mini-diccionario temporal para el upsert
+                    uid_parte = f"{id_grupo}_{parte.get('nombre', 'parte')}"
+                    item_procesar = {
+                        "id_recurso": uid_parte,
+                        "nombre": f"[{item.get('nombre_grupo', id_grupo)}] {parte.get('nombre')}",
+                        "fuentes": parte.get("fuentes", []),
+                        "auth": parte.get('auth', auth_grupo)
+                    }
+                    if upsert_entidad(item_procesar):
+                        nuevos_recursos += 1
+            else:
+                print(f"[DEBUG MAIN_UI] 📄 Detectado como archivo simple. Enviando a SQLite...")
+                # Archivo simple
+                exito = upsert_entidad(item)
+                print(f"[DEBUG MAIN_UI] 💾 Resultado de guardar en SQLite: {exito}")
+
+                if exito:
+                    nuevos_recursos += 1
+            
+        self.log(f"🗄️ {nuevos_recursos} entidades expandidas/guardadas en la base de datos (Estado: 'nuevo').")
+        self.log("⏳ El Scheduler (pendiente de programar) decidirá el orden de descarga.")
+
+        self.cargar_historial()
+        self.filtro.changed(Gtk.FilterChange.DIFFERENT)
+
 
     def al_seleccionar_archivo_json(self, dialog, resultado):
         try:
@@ -281,6 +276,8 @@ class VentanaPrincipal(Adw.ApplicationWindow):
                     self.log("❌ Ningún elemento del JSON pasó el filtro de seguridad (Pydantic).")
                     
         except Exception as e:
+            if "Dismissed by user" in str(e):
+                return
             self.log(f"❌ Error crítico al leer JSON: {str(e)}")
             
 
@@ -317,7 +314,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         item = self.selection_model.get_selected_item()
         if not item: return
         
-        if "Cancelado" in item.estado or "Error" in item.estado or "Rechazado" in item.estado:
+        if "Cancelado" in item.estado or "Error" in item.estado or "Rechazado" in item.estado or "Pendiente" in item.estado:
             if not item.url: 
                 self.log(f"⚠️ No hay un enlace válido guardado para reintentar {item.nombre}.")
                 return

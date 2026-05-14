@@ -223,7 +223,7 @@ def reanudar_descarga_aria2(gid):
 
 def cancelar_descarga_aria2(gid):
     try: requests.post("http://localhost:6800/jsonrpc", json={"jsonrpc": "2.0", "id": "remove", "method": "aria2.remove", "params": [gid]})
-    except: Exception as e:
+    except Exception as e:
         logging.error(f"TraceID: {str(uuid.uuid4()).split('-')[0].upper()} | Fallo remove | Error: {str(e)}")
 
 def configurar_limite_descargas(max_concurrentes=2):
