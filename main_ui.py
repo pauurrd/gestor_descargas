@@ -136,9 +136,46 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         self.log("Sistema iniciado y listo para uso corporativo.")
         init_db() 
         self.log("🗄️ Base de datos local conectada.")
+        self.cargar_historial()
         self.sidebar.select_row(self.sidebar.get_row_at_index(0))
         self.log("🔒 Entorno seguro activado: Tráfico gestionado por cortafuegos (Docker).")
         GLib.timeout_add(1000, self.monitorizar_descargas)
+    
+
+    def cargar_historial(self):
+        """Lee la base de datos al arrancar y pinta los archivos en la pantalla."""
+        self.store.remove_all()
+        import sqlite3
+        import os
+        
+        HOME_DIR = os.path.expanduser("~")
+        DB_NAME = os.path.join(HOME_DIR, ".gestor_descargas_historial.db")
+        
+        try:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            
+            # Buscamos todos los archivos guardados
+            cursor.execute("SELECT uid, nombre, estado FROM files")
+            archivos = cursor.fetchall()
+            
+            for uid, nombre, estado in archivos:
+                # Buscamos la URL principal de ese archivo
+                cursor.execute("SELECT url FROM file_sources WHERE file_uid = ? LIMIT 1", (uid,))
+                url_row = cursor.fetchone()
+                url = url_row[0] if url_row else "Múltiples fuentes"
+                
+                # Lo metemos en la interfaz gráfica
+                estado_mostrar = "⏸ Pendiente" if estado == 'nuevo' else estado
+                nuevo = DescargaItem(uid, nombre, estado_mostrar, "-", "-", "-", url, "Cargado desde BD")
+                self.store.append(nuevo)
+                
+            conn.close()
+            self.log(f"📥 Memoria restaurada: {len(archivos)} descargas recuperadas del historial.")
+        except Exception as e:
+            self.log(f"⚠️ No se pudo cargar el historial: {e}")
+
+    
 
     def procesar_json_importado(self, datos_json):
         descargas_unicas = {}
@@ -202,7 +239,10 @@ class VentanaPrincipal(Adw.ApplicationWindow):
             
         self.log(f"🗄️ {nuevos_recursos} entidades expandidas/guardadas en la base de datos (Estado: 'nuevo').")
         self.log("⏳ El Scheduler (pendiente de programar) decidirá el orden de descarga.")
-                
+
+        self.cargar_historial()
+        self.filtro.changed(Gtk.FilterChange.DIFFERENT)
+
 
     def al_seleccionar_archivo_json(self, dialog, resultado):
         try:
@@ -274,7 +314,7 @@ class VentanaPrincipal(Adw.ApplicationWindow):
         item = self.selection_model.get_selected_item()
         if not item: return
         
-        if "Cancelado" in item.estado or "Error" in item.estado or "Rechazado" in item.estado:
+        if "Cancelado" in item.estado or "Error" in item.estado or "Rechazado" in item.estado or "Pendiente" in item.estado:
             if not item.url: 
                 self.log(f"⚠️ No hay un enlace válido guardado para reintentar {item.nombre}.")
                 return

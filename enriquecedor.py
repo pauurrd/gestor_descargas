@@ -58,7 +58,10 @@ def analizar_capacidades_url(url, auth_tipo, auth_credencial):
         headers["X-My-App-Auth"] = f"Bearer {auth_credencial}"
 
     # Usamos el proxy del sistema que configurasteis para AWS
-    proxies = None
+    proxies = {
+        "http": "http://127.0.0.1:8118",
+        "https": "http://127.0.0.1:8118"
+    }
 
     try:
         # Petición HEAD: Solo pide las cabeceras, no el cuerpo del archivo. ¡Muy rápido!
